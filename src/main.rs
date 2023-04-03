@@ -1,9 +1,12 @@
 #![feature(string_leak)]
 
-mod token;
+use crate::token::TokenStream;
 
-use token::TokenStream;
+mod token;
+mod ast;
 
 fn main() {
-    TokenStream::from_string("fn let <<=56h45".to_string()).for_each(|token| println!("{token:?}"))
+    let mut tokens = TokenStream::from_string("a = 1 + 2 * -3".to_string()).peekable();
+    let expr = ast::parse_expr(15, &mut tokens).unwrap();
+    println!("{expr:?}");
 }

@@ -5,7 +5,6 @@ pub enum Token {
     Id(String),
     Num(i64),
 
-    Let,
     If,
     Loop,
     Fn,
@@ -111,7 +110,6 @@ fn take_id(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
         id.push(c);
     }
     match id.as_str() {
-        "let" => Token::Let,
         "if" => Token::If,
         "loop" => Token::Loop,
         "fn" => Token::Fn,
