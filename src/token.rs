@@ -29,6 +29,9 @@ pub enum Token {
     Semicolon,
 }
 
+/// Parses a new token on every call of `next`,
+/// Takes ownership of the string to simplify things
+#[derive(Debug, Clone)]
 pub struct TokenStream {
     chars: Peekable<Chars<'static>>,
 }
@@ -39,14 +42,19 @@ impl TokenStream {
             chars: String::leak(s).chars().peekable(),
         }
     }
-}
 
-impl Iterator for TokenStream {
-    type Item = Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(match self.chars.next()? {
-            c if c.is_numeric() => take_num(c, &mut self.chars),
+    /// Parses a token forward
+    ///
+    /// # SAFETY
+    ///
+    /// The function assumes:
+    /// - The first char returned from `self.chars.next()` is not whitespace
+    /// - Does not immediately encounter EOF
+    #[inline(always)]
+    #[must_use]
+    pub unsafe fn take_token(&mut self) -> Option<Token> {
+        Some(match self.chars.next().unwrap_unchecked() {
+            c if c.is_ascii_digit() => take_num(c, &mut self.chars),
             c if is_alphanumeric_or_underscore(c) => take_id(c, &mut self.chars),
             '=' => match self.chars.next_if(|&c| c == '=') {
                 Some(..) => Token::EqEq,
@@ -73,9 +81,19 @@ impl Iterator for TokenStream {
             '|' => Token::Or,
             '^' => Token::Xor,
             ';' => Token::Semicolon,
-            ' ' => return self.next(),
             _ => unimplemented!(),
         })
+    }
+}
+
+impl Iterator for TokenStream {
+    type Item = Token;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.chars.peek()?.is_whitespace() {
+            self.chars.next();
+        }
+        unsafe { self.take_token() }
     }
 }
 
@@ -105,18 +123,22 @@ fn take_id(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
 #[must_use]
 fn take_num(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
     let mut num = parse_digit(first);
-    while let Some(c) = chars.next_if(|&c| c.is_numeric()) {
+    while let Some(&c) = chars.peek() {
         let digit = parse_digit(c);
+        if digit > 9 || digit < 0 {
+            break;
+        }
+        chars.next();
         num *= 10;
         num += digit;
     }
     Token::Num(num)
 }
 
+/// Parse a single decimal digit from a character to a `i64` value
+/// Returns number greater than `9` or lower than `0` if the character is not an ASCII numeric digit
 #[inline(always)]
 #[must_use]
 fn parse_digit(c: char) -> i64 {
-    (u32::from(c) - u32::from('0')) as i64
+    u32::from(c).wrapping_sub(u32::from('0')) as i64
 }
-
-
