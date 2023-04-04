@@ -24,7 +24,6 @@ pub enum Token {
     Mod,
     And,
     Or,
-    Xor,
     Semicolon,
 
     ParenOpen,
@@ -96,7 +95,6 @@ impl TokenStream {
             '%' => Token::Mod,
             '&' => Token::And,
             '|' => Token::Or,
-            '^' => Token::Xor,
             ';' => Token::Semicolon,
             '(' => Token::ParenOpen,
             ')' => Token::ParenClose,
