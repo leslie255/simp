@@ -14,6 +14,12 @@ x = 1 + {
 };
     "#
     );
+    test_parse(r#"
+fn sum(a, b) = a + b;
+fn succ(x) = x + 1;
+fn identity(x) = x;
+    "#
+    );
 }
 
 fn test_parse(s: &'static str) {

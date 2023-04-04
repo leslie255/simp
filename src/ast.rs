@@ -26,8 +26,9 @@ pub enum Expr {
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Block(Vec<Expr>),
+    Fn(String, Vec<String>, Option<Box<Expr>>),
     IfElse(Box<Expr>, Vec<Expr>, Vec<Expr>),
-    Loop(Box<Expr>, Vec<Expr>),
+    While(Box<Expr>, Vec<Expr>),
     Call(String, Vec<Expr>),
     StaticData(String),
     Tail(Box<Expr>),
@@ -42,6 +43,37 @@ fn parse_block(tokens: &mut Peekable<TokenStream>) -> Expr {
     }
     tokens.next(); // the `}` token
     Expr::Block(body)
+}
+
+/// Parse a function definition, starting from the iterator pointing at the `fn` token
+#[inline(always)]
+#[must_use]
+fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    let name = tokens
+        .next()?
+        .into_id()
+        .expect("Expects identifier after `fn`");
+    if !tokens.next()?.is_paren_open() {
+        panic!("Expects `(` after function name at function definition")
+    }
+    let mut args = Vec::<String>::new();
+    while tokens.peek().map_or(false, |t| !t.is_paren_close()) {
+        args.push(tokens.next()?.into_id().expect("Expects argument name"));
+        match tokens.peek()? {
+            Token::Comma => {
+                tokens.next();
+            }
+            Token::ParenClose => (),
+            _ => panic!("Expects `,` or `)`"),
+        }
+    }
+    tokens.next();
+    let rhs = match tokens.next()? {
+        Token::Semicolon => None,
+        Token::Eq => Some(parse_expr(15, tokens)?),
+        _ => panic!("Expects `=` or `;`"),
+    };
+    Some(Expr::Fn(name, args, rhs.map(Box::new)))
 }
 
 #[must_use]
@@ -60,7 +92,7 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Sub => parse_unary_rtl!(2, Expr::UnarySub),
         Token::If => todo!(),
         Token::Loop => todo!(),
-        Token::Fn => todo!(),
+        Token::Fn => parse_fn(tokens)?,
         Token::ExcEq => panic!("Unexpected `!=`"),
         Token::Eq => panic!("Unexpected `=`"),
         Token::EqEq => panic!("Unexpected `==`"),
@@ -73,8 +105,10 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Mod => panic!("Unexpected `%`"),
         Token::And => panic!("Unexpected `&`"),
         Token::Or => panic!("Unexpected `|`"),
+        Token::Comma => panic!("Unexpected `,`"),
+        Token::Dot => panic!("Unexpected `.`"),
         Token::Semicolon => parse_expr(15, tokens)?,
-        Token::ParenOpen => parse_expr(15, tokens).expect("Unexpected EOF"),
+        Token::ParenOpen => parse_expr(15, tokens)?,
         Token::ParenClose => todo!(),
         Token::SquareOpen => unimplemented!(),
         Token::SquareClose => unimplemented!(),
@@ -112,12 +146,14 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
             tokens.next();
             expr
         }
+        Some(Token::Dot) => panic!("Member accessing is not supported"),
         Some(Token::Id(..))
         | Some(Token::Num(..))
         | Some(Token::If)
         | Some(Token::Loop)
         | Some(Token::Fn)
         | Some(Token::Exc)
+        | Some(Token::Comma)
         | Some(Token::ParenOpen)
         | Some(Token::SquareOpen)
         | Some(Token::SquareClose)

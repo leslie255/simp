@@ -25,6 +25,8 @@ pub enum Token {
     And,
     Or,
     Semicolon,
+    Comma,
+    Dot,
 
     ParenOpen,
     ParenClose,
@@ -32,6 +34,12 @@ pub enum Token {
     SquareClose,
     BraceOpen,
     BraceClose,
+}
+
+impl Default for Token {
+    fn default() -> Self {
+        Self::ParenClose
+    }
 }
 
 impl Token {
@@ -42,6 +50,30 @@ impl Token {
     #[must_use]
     pub fn is_brace_close(&self) -> bool {
         matches!(self, Self::BraceClose)
+    }
+
+    pub fn into_id(self) -> Option<String> {
+        if let Self::Id(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` if the token is [`ParenOpen`].
+    ///
+    /// [`ParenOpen`]: Token::ParenOpen
+    #[must_use]
+    pub fn is_paren_open(&self) -> bool {
+        matches!(self, Self::ParenOpen)
+    }
+
+    /// Returns `true` if the token is [`ParenClose`].
+    ///
+    /// [`ParenClose`]: Token::ParenClose
+    #[must_use]
+    pub fn is_paren_close(&self) -> bool {
+        matches!(self, Self::ParenClose)
     }
 }
 
@@ -96,6 +128,8 @@ impl TokenStream {
             '&' => Token::And,
             '|' => Token::Or,
             ';' => Token::Semicolon,
+            ',' => Token::Comma,
+            '.' => Token::Dot,
             '(' => Token::ParenOpen,
             ')' => Token::ParenClose,
             '[' => Token::SquareOpen,
