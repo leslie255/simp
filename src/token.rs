@@ -26,6 +26,24 @@ pub enum Token {
     Or,
     Xor,
     Semicolon,
+
+    ParenOpen,
+    ParenClose,
+    SquareOpen,
+    SquareClose,
+    BraceOpen,
+    BraceClose,
+}
+
+impl Token {
+    /// Returns `true` if the token is [`BraceClose`].
+    ///
+    /// [`BraceClose`]: Token::BraceClose
+    #[inline(always)]
+    #[must_use]
+    pub fn is_brace_close(&self) -> bool {
+        matches!(self, Self::BraceClose)
+    }
 }
 
 /// Parses a new token on every call of `next`,
@@ -80,6 +98,12 @@ impl TokenStream {
             '|' => Token::Or,
             '^' => Token::Xor,
             ';' => Token::Semicolon,
+            '(' => Token::ParenOpen,
+            ')' => Token::ParenClose,
+            '[' => Token::SquareOpen,
+            ']' => Token::SquareClose,
+            '{' => Token::BraceOpen,
+            '}' => Token::BraceClose,
             _ => unimplemented!(),
         })
     }

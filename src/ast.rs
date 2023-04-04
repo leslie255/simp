@@ -26,6 +26,7 @@ pub enum Expr {
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Xor(Box<Expr>, Box<Expr>),
+    Block(Vec<Expr>),
     IfElse(Box<Expr>, Vec<Expr>, Vec<Expr>),
     Loop(Box<Expr>, Vec<Expr>),
     Call(String, Vec<Expr>),
@@ -33,8 +34,19 @@ pub enum Expr {
     Tail(Box<Expr>),
 }
 
+/// Parse a block, starting at the iterator pointing at the `{` token
 #[must_use]
-pub fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+fn parse_block(tokens: &mut Peekable<TokenStream>) -> Expr {
+    let mut body = Vec::<Expr>::new();
+    while tokens.peek().map_or(false, |t| !t.is_brace_close()) {
+        body.push(parse_expr(15, tokens).expect("Unexpected EOF"));
+    }
+    tokens.next(); // the `}` token
+    Expr::Block(body)
+}
+
+#[must_use]
+fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
         ($precedence:expr,$expr_ty:path) => {{
             let expr = parse_expr($precedence, tokens).expect("Unexpected EOF");
@@ -49,21 +61,27 @@ pub fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<
         Token::If => todo!(),
         Token::Loop => todo!(),
         Token::Fn => todo!(),
-        Token::Eq => todo!(),
-        Token::EqEq => todo!(),
         Token::Exc => todo!(),
-        Token::ExcEq => todo!(),
-        Token::Le => todo!(),
-        Token::LeEq => todo!(),
-        Token::Gr => todo!(),
-        Token::GrEq => todo!(),
-        Token::Mul => todo!(),
-        Token::Div => todo!(),
-        Token::Mod => todo!(),
-        Token::And => todo!(),
-        Token::Or => todo!(),
-        Token::Xor => todo!(),
-        Token::Semicolon => todo!(),
+        Token::ExcEq => panic!("Unexpected `!=`"),
+        Token::Eq => panic!("Unexpected `=`"),
+        Token::EqEq => panic!("Unexpected `==`"),
+        Token::Le => panic!("Unexpected `<`"),
+        Token::LeEq => panic!("Unexpected `<=`"),
+        Token::Gr => panic!("Unexpected `>`"),
+        Token::GrEq => panic!("Unexpected `>=`"),
+        Token::Mul => panic!("Unexpected `*`"),
+        Token::Div => panic!("Unexpected `/`"),
+        Token::Mod => panic!("Unexpected `%`"),
+        Token::And => panic!("Unexpected `&`"),
+        Token::Or => panic!("Unexpected `|`"),
+        Token::Xor => panic!("Unexpected `^`"),
+        Token::Semicolon => parse_expr(15, tokens)?,
+        Token::ParenOpen => parse_expr(15, tokens).expect("Unexpected EOF"),
+        Token::ParenClose => todo!(),
+        Token::SquareOpen => unimplemented!(),
+        Token::SquareClose => unimplemented!(),
+        Token::BraceOpen => parse_block(tokens),
+        Token::BraceClose => panic!("Unexpected `}}`"),
     };
     macro_rules! parse_bin_op {
         ($precedence:expr, $expr_ty:path) => {
@@ -92,14 +110,31 @@ pub fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<
         Some(Token::And) => parse_bin_op!(11, Expr::And),
         Some(Token::Or) => parse_bin_op!(13, Expr::Or),
         Some(Token::Xor) => parse_bin_op!(12, Expr::Xor),
+        Some(Token::BraceClose) => Expr::Tail(Box::new(expr)),
+        Some(Token::ParenClose) | Some(Token::Semicolon) => {
+            tokens.next();
+            expr
+        }
         Some(Token::Id(..))
         | Some(Token::Num(..))
         | Some(Token::If)
         | Some(Token::Loop)
         | Some(Token::Fn)
         | Some(Token::Exc)
-        | Some(Token::Semicolon)
+        | Some(Token::ParenOpen)
+        | Some(Token::SquareOpen)
+        | Some(Token::SquareClose)
+        | Some(Token::BraceOpen)
         | None => expr,
     };
     Some(expr)
+}
+
+#[must_use]
+pub fn parse(mut tokens: Peekable<TokenStream>) -> Vec<Expr> {
+    let mut ast = Vec::<Expr>::new();
+    while let Some(expr) = parse_expr(15, &mut tokens) {
+        ast.push(expr);
+    }
+    ast
 }

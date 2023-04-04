@@ -2,11 +2,23 @@
 
 use crate::token::TokenStream;
 
-mod token;
 mod ast;
+mod token;
 
 fn main() {
-    let mut tokens = TokenStream::from_string("a = 1 + 2 * -3".to_string()).peekable();
-    let expr = ast::parse_expr(15, &mut tokens).unwrap();
-    println!("{expr:?}");
+    test_parse("a = (1 + 2 * 5); 2 * -3;");
+    test_parse(r#"
+x = 1 + {
+    y = (5 + 2) * 3;
+    y
+};
+    "#
+    );
+}
+
+fn test_parse(s: &'static str) {
+    println!("{s}");
+    let tokens = TokenStream::from_string(s.to_string()).peekable();
+    let expr = ast::parse(tokens);
+    println!("\n\n{expr:?}\n-----------------------------");
 }
