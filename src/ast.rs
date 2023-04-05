@@ -39,13 +39,24 @@ pub enum Expr {
 
 /// Parse a block, starting at the iterator pointing at the `{` token
 #[must_use]
-fn parse_block(tokens: &mut Peekable<TokenStream>) -> Expr {
+fn parse_block(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     let mut body = Vec::<Expr>::new();
-    while tokens.peek().map_or(false, |t| !t.is_brace_close()) {
-        body.push(parse_expr(15, tokens).expect("Unexpected EOF"));
+    loop {
+        let expr = parse_expr(15, tokens).expect("Unexpected EOF");
+        match tokens.peek()? {
+            Token::Semicolon => {
+                tokens.next();
+            }
+            Token::BraceClose => {
+                body.push(Expr::Tail(Box::new(expr)));
+                break;
+            }
+            _ => (),
+        }
+        body.push(expr);
     }
     tokens.next(); // the `}` token
-    Expr::Block(body)
+    Some(Expr::Block(body))
 }
 
 /// Parse a function definition, starting from the iterator pointing at the `fn` token
@@ -125,10 +136,10 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::LeEq => panic!("Unexpected `<=`"),
         Token::Gr => panic!("Unexpected `>`"),
         Token::GrEq => panic!("Unexpected `>=`"),
-        Token::Mul => panic!("Unexpected `*`"),
+        Token::Mul => unimplemented!("Dereference expressions (`*expr`) is not supported, or maybe it was just an accidental `*`?"),
         Token::Div => panic!("Unexpected `/`"),
         Token::Mod => panic!("Unexpected `%`"),
-        Token::And => panic!("Unexpected `&`"),
+        Token::And => unimplemented!("Address expressions (`&expr`) is not supported, or maybe it was just an accidental `&`?"),
         Token::Or => panic!("Unexpected `|`"),
         Token::Comma => panic!("Unexpected `,`"),
         Token::Dot => panic!("Unexpected `.`"),
@@ -141,7 +152,7 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::ParenClose => panic!("Unexpected `)`"),
         Token::SquareOpen => unimplemented!(),
         Token::SquareClose => unimplemented!(),
-        Token::BraceOpen => parse_block(tokens),
+        Token::BraceOpen => parse_block(tokens)?,
         Token::BraceClose => panic!("Unexpected `}}`"),
     };
     macro_rules! parse_bin_op {
@@ -170,22 +181,9 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Some(Token::Mod) => parse_bin_op!(3, Expr::Mod),
         Some(Token::And) => parse_bin_op!(11, Expr::And),
         Some(Token::Or) => parse_bin_op!(13, Expr::Or),
-        Some(Token::BraceClose) => Expr::Tail(Box::new(expr)),
         Some(Token::Dot) => panic!("Member accessing is not supported"),
         Some(Token::ParenOpen) => Expr::Call(Box::new(expr), parse_call_args(tokens)?),
-        Some(Token::Id(..))
-        | Some(Token::Num(..))
-        | Some(Token::If)
-        | Some(Token::Loop)
-        | Some(Token::Fn)
-        | Some(Token::Exc)
-        | Some(Token::Semicolon)
-        | Some(Token::Comma)
-        | Some(Token::SquareOpen)
-        | Some(Token::ParenClose)
-        | Some(Token::SquareClose)
-        | Some(Token::BraceOpen)
-        | None => expr,
+        _ => expr,
     };
     Some(expr)
 }
