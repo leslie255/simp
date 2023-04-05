@@ -2,7 +2,7 @@ use std::iter::Peekable;
 
 use crate::{
     token::{Token, TokenStream},
-    ExpectTrue,
+    ExpectTrue, gen,
 };
 
 #[allow(dead_code)]
@@ -35,6 +35,29 @@ pub enum Expr {
     Call(Box<Expr>, Vec<Expr>),
     StaticData(String),
     Tail(Box<Expr>),
+}
+
+impl Expr {
+    #[allow(dead_code)]
+    #[must_use]
+    #[inline(always)]
+    pub fn into_fn(self) -> Option<(String, Vec<String>, Option<Box<Expr>>)> {
+        match self {
+            Self::Fn(name, args, body) => Some((name, args, body)),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    #[must_use]
+    #[inline(always)]
+    pub fn as_id(&self) -> Option<&String> {
+        if let Self::Id(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
 }
 
 /// Parse a block, starting at the iterator pointing at the `{` token

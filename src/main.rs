@@ -3,40 +3,19 @@
 use crate::token::TokenStream;
 
 mod ast;
+mod gen;
 mod token;
+mod scan;
 
 fn main() {
-    test_parse("a = (1 + 2) * 5; 2 * -3;");
-    test_parse(
-        r#"
-x = 1 + {
-    y = (5 + 2) * 3;
-    y
-};
-    "#,
-    );
-    test_parse(
-        r#"
-fn sum(a, b) = a + b;
-fn succ(x) = x + 1;
-fn identity(x) = x;
-    "#,
-    );
-    test_parse(
-        r#"
-func();
-print(255);
-sum(255, 1);
-    "#,
-    );
-    test_parse(
-        r#"
-if a { 10 } else { 20 };
-if a { 0 }
-    "#,
+    gen::compile_func(
+        "main".to_string(),
+        vec!["argc".to_string(), "argv".to_string()],
+        ast::Expr::Num(0),
     );
 }
 
+#[allow(dead_code)]
 fn test_parse(s: &'static str) {
     println!("{s}");
     let tokens = TokenStream::from_str(s).peekable();
@@ -52,7 +31,7 @@ impl ExpectTrue for bool {
     #[inline]
     #[cold]
     #[track_caller]
-    fn expect_true(self,msg:&str) -> () {
+    fn expect_true(self, msg: &str) -> () {
         if !self {
             panic!("{msg}");
         }
