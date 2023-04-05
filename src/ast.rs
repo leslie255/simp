@@ -30,7 +30,7 @@ pub enum Expr {
     Or(Box<Expr>, Box<Expr>),
     Block(Vec<Expr>),
     Fn(String, Vec<String>, Option<Box<Expr>>),
-    IfElse(Box<Expr>, Vec<Expr>, Vec<Expr>),
+    IfElse(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
     While(Box<Expr>, Vec<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     StaticData(String),
@@ -112,6 +112,28 @@ fn parse_call_args(tokens: &mut Peekable<TokenStream>) -> Option<Vec<Expr>> {
     Some(args)
 }
 
+/// Parse if statements, starting from the iterator pointing at the token `if`
+#[inline(always)]
+#[must_use]
+fn parse_if(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    let condition = parse_expr(15, tokens)?;
+    tokens.next()?.is_brace_open().expect_true("Expect `{`");
+    let if_body = parse_block(tokens)?;
+    let else_body = match tokens.peek() {
+        Some(Token::Else) => {
+            tokens.next();
+            tokens.next()?.is_brace_open().expect_true("Expect `{`");
+            Some(parse_block(tokens)?)
+        }
+        _ => None,
+    };
+    Some(Expr::IfElse(
+        Box::new(condition),
+        Box::new(if_body),
+        else_body.map(Box::new),
+    ))
+}
+
 #[must_use]
 fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
@@ -126,7 +148,8 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Exc => parse_unary_rtl!(2, Expr::Not),
         Token::Add => parse_unary_rtl!(2, Expr::UnaryAdd),
         Token::Sub => parse_unary_rtl!(2, Expr::UnarySub),
-        Token::If => todo!(),
+        Token::If => parse_if(tokens)?,
+        Token::Else => panic!("Unexpected `else`"),
         Token::Loop => todo!(),
         Token::Fn => parse_fn(tokens)?,
         Token::ExcEq => panic!("Unexpected `!=`"),

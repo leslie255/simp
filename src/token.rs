@@ -6,6 +6,7 @@ pub enum Token {
     Num(i64),
 
     If,
+    Else,
     Loop,
     Fn,
 
@@ -43,15 +44,6 @@ impl Default for Token {
 }
 
 impl Token {
-    /// Returns `true` if the token is [`BraceClose`].
-    ///
-    /// [`BraceClose`]: Token::BraceClose
-    #[inline(always)]
-    #[must_use]
-    pub fn is_brace_close(&self) -> bool {
-        matches!(self, Self::BraceClose)
-    }
-
     #[inline(always)]
     #[must_use]
     pub fn into_id(self) -> Option<String> {
@@ -78,6 +70,14 @@ impl Token {
     #[must_use]
     pub fn is_paren_close(&self) -> bool {
         matches!(self, Self::ParenClose)
+    }
+
+    /// Returns `true` if the token is [`BraceOpen`].
+    ///
+    /// [`BraceOpen`]: Token::BraceOpen
+    #[must_use]
+    pub fn is_brace_open(&self) -> bool {
+        matches!(self, Self::BraceOpen)
     }
 }
 
@@ -179,6 +179,7 @@ fn take_id(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
     }
     match id.as_str() {
         "if" => Token::If,
+        "else" => Token::Else,
         "loop" => Token::Loop,
         "fn" => Token::Fn,
         _ => Token::Id(id),

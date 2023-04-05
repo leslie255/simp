@@ -29,6 +29,12 @@ print(255);
 sum(255, 1);
     "#,
     );
+    test_parse(
+        r#"
+if a { 10 } else { 20 };
+if a { 0 }
+    "#,
+    );
 }
 
 fn test_parse(s: &'static str) {
