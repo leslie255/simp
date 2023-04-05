@@ -1,6 +1,9 @@
 use std::iter::Peekable;
 
-use crate::token::{Token, TokenStream};
+use crate::{
+    token::{Token, TokenStream},
+    ExpectTrue,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -29,7 +32,7 @@ pub enum Expr {
     Fn(String, Vec<String>, Option<Box<Expr>>),
     IfElse(Box<Expr>, Vec<Expr>, Vec<Expr>),
     While(Box<Expr>, Vec<Expr>),
-    Call(String, Vec<Expr>),
+    Call(Box<Expr>, Vec<Expr>),
     StaticData(String),
     Tail(Box<Expr>),
 }
@@ -53,9 +56,10 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
         .next()?
         .into_id()
         .expect("Expects identifier after `fn`");
-    if !tokens.next()?.is_paren_open() {
-        panic!("Expects `(` after function name at function definition")
-    }
+    tokens
+        .next()?
+        .is_paren_open()
+        .expect_true("Expects `(` after function name at function definition");
     let mut args = Vec::<String>::new();
     while tokens.peek().map_or(false, |t| !t.is_paren_close()) {
         args.push(tokens.next()?.into_id().expect("Expects argument name"));
@@ -74,6 +78,27 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
         _ => panic!("Expects `=` or `;`"),
     };
     Some(Expr::Fn(name, args, rhs.map(Box::new)))
+}
+
+/// Parse arguments to a function call, starting from the iterator pointing at the token before `(`
+#[inline(always)]
+#[must_use]
+fn parse_call_args(tokens: &mut Peekable<TokenStream>) -> Option<Vec<Expr>> {
+    tokens.next();
+    let mut args = Vec::<Expr>::new();
+    while tokens.peek().map_or(false, |t| !t.is_paren_close()) {
+        args.push(parse_expr(15, tokens)?);
+        match tokens.peek()? {
+            Token::Comma => {
+                tokens.next();
+            }
+            Token::ParenClose => (),
+            _ => panic!("Expects `,` or `)`"),
+        }
+    }
+    println!("{:?}", tokens.peek()?);
+    tokens.next();
+    Some(args)
 }
 
 #[must_use]
@@ -108,8 +133,12 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Comma => panic!("Unexpected `,`"),
         Token::Dot => panic!("Unexpected `.`"),
         Token::Semicolon => parse_expr(15, tokens)?,
-        Token::ParenOpen => parse_expr(15, tokens)?,
-        Token::ParenClose => todo!(),
+        Token::ParenOpen => {
+            let expr = parse_expr(15, tokens)?;
+            tokens.next()?.is_paren_close().expect_true("Expect `)`");
+            expr
+        }
+        Token::ParenClose => panic!("Unexpected `)`"),
         Token::SquareOpen => unimplemented!(),
         Token::SquareClose => unimplemented!(),
         Token::BraceOpen => parse_block(tokens),
@@ -142,20 +171,18 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Some(Token::And) => parse_bin_op!(11, Expr::And),
         Some(Token::Or) => parse_bin_op!(13, Expr::Or),
         Some(Token::BraceClose) => Expr::Tail(Box::new(expr)),
-        Some(Token::ParenClose) | Some(Token::Semicolon) => {
-            tokens.next();
-            expr
-        }
         Some(Token::Dot) => panic!("Member accessing is not supported"),
+        Some(Token::ParenOpen) => Expr::Call(Box::new(expr), parse_call_args(tokens)?),
         Some(Token::Id(..))
         | Some(Token::Num(..))
         | Some(Token::If)
         | Some(Token::Loop)
         | Some(Token::Fn)
         | Some(Token::Exc)
+        | Some(Token::Semicolon)
         | Some(Token::Comma)
-        | Some(Token::ParenOpen)
         | Some(Token::SquareOpen)
+        | Some(Token::ParenClose)
         | Some(Token::SquareClose)
         | Some(Token::BraceOpen)
         | None => expr,
@@ -168,6 +195,9 @@ pub fn parse(mut tokens: Peekable<TokenStream>) -> Vec<Expr> {
     let mut ast = Vec::<Expr>::new();
     while let Some(expr) = parse_expr(15, &mut tokens) {
         ast.push(expr);
+        if let Some(Token::Semicolon) = tokens.peek() {
+            tokens.next();
+        }
     }
     ast
 }

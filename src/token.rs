@@ -52,6 +52,8 @@ impl Token {
         matches!(self, Self::BraceClose)
     }
 
+    #[inline(always)]
+    #[must_use]
     pub fn into_id(self) -> Option<String> {
         if let Self::Id(v) = self {
             Some(v)
@@ -63,6 +65,7 @@ impl Token {
     /// Returns `true` if the token is [`ParenOpen`].
     ///
     /// [`ParenOpen`]: Token::ParenOpen
+    #[inline(always)]
     #[must_use]
     pub fn is_paren_open(&self) -> bool {
         matches!(self, Self::ParenOpen)
@@ -71,6 +74,7 @@ impl Token {
     /// Returns `true` if the token is [`ParenClose`].
     ///
     /// [`ParenClose`]: Token::ParenClose
+    #[inline(always)]
     #[must_use]
     pub fn is_paren_close(&self) -> bool {
         matches!(self, Self::ParenClose)
@@ -85,9 +89,17 @@ pub struct TokenStream {
 }
 
 impl TokenStream {
+    #[allow(dead_code)]
     pub fn from_string(s: String) -> Self {
         Self {
             chars: String::leak(s).chars().peekable(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn from_str(s: &'static str) -> Self {
+        Self {
+            chars: s.chars().peekable(),
         }
     }
 
