@@ -1,26 +1,42 @@
 #![feature(string_leak)]
 
+use std::fs;
+
+use ast::Expr;
+use cranelift_codegen::{settings, verify_function, Context};
+
 use crate::token::TokenStream;
 
 mod ast;
 mod gen;
-mod token;
 mod scan;
+mod token;
 
 fn main() {
-    gen::compile_func(
-        "main".to_string(),
-        vec!["argc".to_string(), "argv".to_string()],
-        ast::Expr::Num(0),
-    );
+    let ast = parse_ast("fn main() = { a = 255 + 3 * 4; b = 256 + a; 0 };");
+    let func = ast.into_iter().next().unwrap().into_fn().unwrap();
+    let func = gen::compile_func(func);
+    let flags = settings::Flags::new(settings::builder());
+    println!("{}", func.display());
+    verify_function(&func, &flags).expect("Error verifying the function");
+    let isa = cranelift_native::builder()
+        .expect("Error getting the native ISA")
+        .finish(flags)
+        .unwrap();
+    let mut ctx = Context::for_function(func);
+    let mut buf = Vec::<u8>::new();
+    ctx.compile_and_emit(isa.as_ref(), &mut buf).unwrap();
+    write_bytes_to_file("output", buf.as_ref()).unwrap();
 }
 
-#[allow(dead_code)]
-fn test_parse(s: &'static str) {
-    println!("{s}");
+fn write_bytes_to_file(path: &str, buf: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    std::io::prelude::Write::write_all(&mut file, buf)
+}
+
+fn parse_ast(s: &'static str) -> Vec<Expr> {
     let tokens = TokenStream::from_str(s).peekable();
-    let expr = ast::parse(tokens);
-    println!("\n\n{expr:?}\n-----------------------------");
+    ast::parse(tokens)
 }
 
 pub(self) trait ExpectTrue {

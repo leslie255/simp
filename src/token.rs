@@ -79,6 +79,14 @@ impl Token {
     pub fn is_brace_open(&self) -> bool {
         matches!(self, Self::BraceOpen)
     }
+
+    /// Returns `true` if the token is [`BraceClose`].
+    ///
+    /// [`BraceClose`]: Token::BraceClose
+    #[must_use]
+    pub fn is_brace_close(&self) -> bool {
+        matches!(self, Self::BraceClose)
+    }
 }
 
 /// Parses a new token on every call of `next`,

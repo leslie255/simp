@@ -2,7 +2,7 @@ use std::iter::Peekable;
 
 use crate::{
     token::{Token, TokenStream},
-    ExpectTrue, gen,
+    ExpectTrue,
 };
 
 #[allow(dead_code)]
@@ -38,7 +38,6 @@ pub enum Expr {
 }
 
 impl Expr {
-    #[allow(dead_code)]
     #[must_use]
     #[inline(always)]
     pub fn into_fn(self) -> Option<(String, Vec<String>, Option<Box<Expr>>)> {
@@ -58,19 +57,30 @@ impl Expr {
             None
         }
     }
+
+    #[must_use]
+    #[inline(always)]
+    pub fn as_block(&self) -> Option<&Vec<Expr>> {
+        if let Self::Block(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
 }
 
 /// Parse a block, starting at the iterator pointing at the `{` token
 #[must_use]
 fn parse_block(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     let mut body = Vec::<Expr>::new();
-    loop {
+    while !tokens.peek()?.is_brace_close() {
         let expr = parse_expr(15, tokens).expect("Unexpected EOF");
         match tokens.peek()? {
             Token::Semicolon => {
                 tokens.next();
             }
             Token::BraceClose => {
+                tokens.next();
                 body.push(Expr::Tail(Box::new(expr)));
                 break;
             }
