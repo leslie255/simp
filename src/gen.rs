@@ -4,10 +4,17 @@ use cranelift::prelude::{types::I64, AbiParam, InstBuilder, Signature, Value};
 use cranelift_codegen::{
     ir::{Function, UserFuncName},
     isa::CallConv,
+    verifier::VerifierResult,
+    verify_function, Context,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_object::ObjectModule;
 
-use crate::{ast::Expr, scan::{VarTable, scan_func}};
+use crate::{
+    ast::Expr,
+    scan::{scan_func, VarTable},
+};
 
 /// Codegen for things that can be used as an operand
 /// e.g. number literal, identifier, lhs + rhs, if-else block, ...
@@ -71,11 +78,7 @@ fn gen_assign<'f>(
     builder.def_var(var_table.expect_exist(name.as_str()), rhs)
 }
 
-fn gen_tail<'f>(
-    builder: &mut FunctionBuilder<'f>,
-    var_table: &VarTable<'_>,
-    expr: &Expr,
-) {
+fn gen_tail<'f>(builder: &mut FunctionBuilder<'f>, var_table: &VarTable<'_>, expr: &Expr) {
     let val = [gen_operand(builder, var_table, expr)];
     builder.ins().return_(&val);
 }
@@ -92,16 +95,29 @@ fn gen_statement<'f>(builder: &mut FunctionBuilder<'f>, var_table: &VarTable<'_>
     }
 }
 
-pub fn compile_func((_name, args, body): (String, Vec<String>, Option<Box<Expr>>)) -> Function {
-    let body = body.expect("TODO: Function declaration without body");
+#[inline(always)]
+#[must_use]
+fn make_func_signature(args: Vec<String>) -> Signature {
     let mut sign = Signature::new(CallConv::SystemV);
     sign.params.reserve(args.len());
     (0..args.len()).for_each(|_| {
         sign.params.push(AbiParam::new(I64));
     });
     sign.returns.push(AbiParam::new(I64));
+    sign
+}
+
+pub fn compile_func(
+    module: &mut ObjectModule,
+    (name, args, body): (String, Vec<String>, Option<Box<Expr>>),
+) -> VerifierResult<FuncId> {
+    let body = body.expect("TODO: Function declaration without body");
+    let sign = make_func_signature(args);
     let var_table = scan_func(&body);
     let mut fn_builder_ctx = FunctionBuilderContext::new();
+    let func_id = module
+        .declare_function(&name, Linkage::Export, &sign)
+        .unwrap();
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sign);
     let mut fn_builder = FunctionBuilder::new(&mut func, &mut fn_builder_ctx);
     var_table
@@ -115,6 +131,11 @@ pub fn compile_func((_name, args, body): (String, Vec<String>, Option<Box<Expr>>
         .expect("Single instruction functions isn't supported yet")
         .into_iter()
         .for_each(|e| gen_statement(&mut fn_builder, &var_table, e));
+
     fn_builder.finalize();
-    func
+    println!("{}", func.display());
+    verify_function(&func, module.isa().flags())?;
+    let mut ctx = Context::for_function(func);
+    module.define_function(func_id, &mut ctx).unwrap();
+    Ok(func_id)
 }

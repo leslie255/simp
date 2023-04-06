@@ -1,9 +1,10 @@
 #![feature(string_leak)]
 
-use std::fs;
+use std::{fs, sync::Arc};
 
 use ast::Expr;
-use cranelift_codegen::{settings, verify_function, Context};
+use cranelift_codegen::settings;
+use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::token::TokenStream;
 
@@ -13,20 +14,27 @@ mod scan;
 mod token;
 
 fn main() {
-    let ast = parse_ast("fn main() = { a = 255 + 3 * 4; b = 256 + a; 0 };");
-    let func = ast.into_iter().next().unwrap().into_fn().unwrap();
-    let func = gen::compile_func(func);
-    let flags = settings::Flags::new(settings::builder());
-    println!("{}", func.display());
-    verify_function(&func, &flags).expect("Error verifying the function");
+    let func_expr = {
+        let ast = parse_ast("fn main() = { a = 255 + 3 * 4; b = 256 + a; 0 };");
+        ast.into_iter().next().unwrap().into_fn().unwrap()
+    };
     let isa = cranelift_native::builder()
         .expect("Error getting the native ISA")
-        .finish(flags)
+        .finish(settings::Flags::new(settings::builder()))
         .unwrap();
-    let mut ctx = Context::for_function(func);
-    let mut buf = Vec::<u8>::new();
-    ctx.compile_and_emit(isa.as_ref(), &mut buf).unwrap();
-    write_bytes_to_file("output", buf.as_ref()).unwrap();
+    let mut module = {
+        let obj_builder = ObjectBuilder::new(
+            Arc::clone(&isa),
+            "output",
+            cranelift_module::default_libcall_names(),
+        )
+        .unwrap();
+        ObjectModule::new(obj_builder)
+    };
+    gen::compile_func(&mut module, func_expr).unwrap();
+    let obj = module.finish();
+    let bytes = obj.emit().unwrap();
+    write_bytes_to_file("output.o", bytes.as_ref()).unwrap();
 }
 
 fn write_bytes_to_file(path: &str, buf: &[u8]) -> std::io::Result<()> {

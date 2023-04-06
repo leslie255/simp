@@ -3,6 +3,10 @@
 
 ### Emacs ###
 # -*- mode: gitignore; -*-
+
+output
+output.o
+
 *~
 \#*\#
 /.emacs.desktop
