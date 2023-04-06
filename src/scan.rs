@@ -41,7 +41,7 @@ fn recursive_scan_assign<'e>(expr: &'e Expr, f: &mut impl FnMut(&'e str)) {
     match expr {
         Expr::Assign(lhs, _) => {
             let str = lhs.as_id().expect("Expects a variable name as lhs of `=`");
-            f(str.as_str());
+            f(str);
         }
         Expr::Block(body) => body.iter().for_each(|e| recursive_scan_assign(e, f)),
         Expr::Fn(_, _, Some(expr)) | Expr::IfElse(_, expr, None) => recursive_scan_assign(expr, f),

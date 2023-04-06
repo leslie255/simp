@@ -1,8 +1,12 @@
 #![allow(dead_code)]
 
-use cranelift::prelude::{types::I64, AbiParam, InstBuilder, Signature, Value};
+use std::collections::HashMap;
+
+use cranelift::prelude::{
+    types::I64, AbiParam, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
+};
 use cranelift_codegen::{
-    ir::{Function, UserFuncName},
+    ir::{FuncRef, Function, Inst, UserExternalName, UserFuncName},
     isa::CallConv,
     verifier::VerifierResult,
     verify_function, Context,
@@ -21,6 +25,7 @@ use crate::{
 fn gen_operand<'f>(
     builder: &mut FunctionBuilder<'f>,
     var_table: &VarTable<'_>,
+    _symbols: &mut SymbolTable,
     expr: &Expr,
 ) -> Value {
     match expr {
@@ -36,23 +41,23 @@ fn gen_operand<'f>(
         Expr::UnaryAdd(_) => todo!(),
         Expr::UnarySub(_) => todo!(),
         Expr::Add(lhs, rhs) => {
-            let lhs = gen_operand(builder, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, var_table, rhs.as_ref());
+            let lhs = gen_operand(builder, var_table, _symbols, lhs.as_ref());
+            let rhs = gen_operand(builder, var_table, _symbols, rhs.as_ref());
             builder.ins().iadd(lhs, rhs)
         }
         Expr::Sub(lhs, rhs) => {
-            let lhs = gen_operand(builder, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, var_table, rhs.as_ref());
+            let lhs = gen_operand(builder, var_table, _symbols, lhs.as_ref());
+            let rhs = gen_operand(builder, var_table, _symbols, rhs.as_ref());
             builder.ins().isub(lhs, rhs)
         }
         Expr::Mul(lhs, rhs) => {
-            let lhs = gen_operand(builder, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, var_table, rhs.as_ref());
+            let lhs = gen_operand(builder, var_table, _symbols, lhs.as_ref());
+            let rhs = gen_operand(builder, var_table, _symbols, rhs.as_ref());
             builder.ins().imul(lhs, rhs)
         }
         Expr::Div(lhs, rhs) => {
-            let lhs = gen_operand(builder, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, var_table, rhs.as_ref());
+            let lhs = gen_operand(builder, var_table, _symbols, lhs.as_ref());
+            let rhs = gen_operand(builder, var_table, _symbols, rhs.as_ref());
             builder.ins().sdiv(lhs, rhs)
         }
         Expr::Mod(_, _) => todo!(),
@@ -68,36 +73,97 @@ fn gen_operand<'f>(
 fn gen_assign<'f>(
     builder: &mut FunctionBuilder<'f>,
     var_table: &VarTable<'_>,
+    symbols: &mut SymbolTable,
     lhs: &Expr,
     rhs: &Expr,
 ) {
     let name = lhs
         .as_id()
         .expect("Expression not allowed as lhs of assignment");
-    let rhs = gen_operand(builder, var_table, rhs);
-    builder.def_var(var_table.expect_exist(name.as_str()), rhs)
+    let rhs = gen_operand(builder, var_table, symbols, rhs);
+    builder.def_var(var_table.expect_exist(name), rhs)
 }
 
-fn gen_tail<'f>(builder: &mut FunctionBuilder<'f>, var_table: &VarTable<'_>, expr: &Expr) {
-    let val = [gen_operand(builder, var_table, expr)];
-    builder.ins().return_(&val);
+/// Imports an user-defined external function to a function, returns the signature of the imported
+/// function and the result `FuncRef`
+fn import_func<'a>(
+    builder: &mut FunctionBuilder<'_>,
+    symbols: &'a SymbolTable,
+    name: &str,
+) -> (&'a Signature, FuncRef) {
+    let (index, sig) = symbols.func(name).expect(
+        format!("Trying to call the function `{name}` which does not exist, symbols: {symbols:?}")
+            .as_str(),
+    );
+    let sig_ref = builder.import_signature(sig.clone());
+    let name_ref = builder
+        .func
+        .declare_imported_user_function(UserExternalName::new(0, *index));
+    let func_ref = builder.import_function(ExtFuncData {
+        name: ExternalName::user(name_ref),
+        signature: sig_ref,
+        colocated: false,
+    });
+    (sig, func_ref)
 }
 
-fn gen_statement<'f>(builder: &mut FunctionBuilder<'f>, var_table: &VarTable<'_>, expr: &Expr) {
+fn gen_call<'f>(
+    builder: &mut FunctionBuilder<'f>,
+    symbols: &mut SymbolTable,
+    var_table: &VarTable<'_>,
+    callee: &Expr,
+    args: &Vec<Expr>,
+) -> Inst {
+    let name = callee
+        .as_id()
+        .expect("Dynamic function calling is not supported yet");
+    let (sig, func_ref) = import_func(builder, symbols, name);
+    if args.len() != sig.params.len() {
+        panic!(
+            "The function `{name}` requires {} arguments, but only {} are provided",
+            args.len(),
+            sig.params.len()
+        );
+    }
+    let args: Vec<Value> = args
+        .iter()
+        .map(|e| gen_operand(builder, var_table, symbols, e))
+        .collect();
+    builder.ins().call(func_ref, args.as_ref())
+}
+
+fn gen_tail<'f>(
+    builder: &mut FunctionBuilder<'f>,
+    symbols: &mut SymbolTable,
+    var_table: &VarTable<'_>,
+    expr: &Expr,
+) {
+    let val = gen_operand(builder, var_table, symbols, expr);
+    builder.ins().return_(&[val]);
+}
+
+fn gen_statement<'f>(
+    builder: &mut FunctionBuilder<'f>,
+    symbols: &mut SymbolTable,
+    var_table: &VarTable<'_>,
+    expr: &Expr,
+) {
     match expr {
-        Expr::Assign(lhs, rhs) => gen_assign(builder, var_table, lhs, rhs),
+        Expr::Assign(lhs, rhs) => gen_assign(builder, var_table, symbols, lhs, rhs),
+        Expr::Call(callee, args) => {
+            gen_call(builder, symbols, var_table, callee, args);
+        }
         Expr::Block(_) => todo!(),
         Expr::IfElse(_, _, _) => todo!(),
         Expr::While(_, _) => todo!(),
-        Expr::Call(_, _) => todo!(),
-        Expr::Tail(expr) => gen_tail(builder, var_table, expr),
+        Expr::Tail(expr) => gen_tail(builder, symbols, var_table, expr),
         _ => panic!("Expression not allowed as a statement"),
     }
 }
 
 #[inline(always)]
 #[must_use]
-fn make_func_signature(args: Vec<String>) -> Signature {
+fn make_func_signature(args: &Vec<String>) -> Signature {
     let mut sign = Signature::new(CallConv::SystemV);
     sign.params.reserve(args.len());
     (0..args.len()).for_each(|_| {
@@ -109,16 +175,23 @@ fn make_func_signature(args: Vec<String>) -> Signature {
 
 pub fn compile_func(
     module: &mut ObjectModule,
+    symbols: &mut SymbolTable,
     (name, args, body): (String, Vec<String>, Option<Box<Expr>>),
 ) -> VerifierResult<FuncId> {
-    let body = body.expect("TODO: Function declaration without body");
-    let sign = make_func_signature(args);
-    let var_table = scan_func(&body);
+    let sig = make_func_signature(&args);
     let mut fn_builder_ctx = FunctionBuilderContext::new();
     let func_id = module
-        .declare_function(&name, Linkage::Export, &sign)
+        .declare_function(&name, Linkage::Export, &sig)
         .unwrap();
-    let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sign);
+    let func_index = symbols
+        .add_func(name, sig.clone())
+        .expect("Redefinition of function");
+    let body = match body {
+        Some(x) => x,
+        None => return Ok(func_id),
+    };
+    let var_table = scan_func(&body);
+    let mut func = Function::with_name_signature(UserFuncName::user(0, func_index), sig);
     let mut fn_builder = FunctionBuilder::new(&mut func, &mut fn_builder_ctx);
     var_table
         .iter()
@@ -128,9 +201,9 @@ pub fn compile_func(
     fn_builder.switch_to_block(block0);
     fn_builder.seal_block(block0);
     body.as_block()
-        .expect("Single instruction functions isn't supported yet")
+        .expect("Single expression functions isn't supported yet")
         .into_iter()
-        .for_each(|e| gen_statement(&mut fn_builder, &var_table, e));
+        .for_each(|e| gen_statement(&mut fn_builder, symbols, &var_table, e));
 
     fn_builder.finalize();
     println!("{}", func.display());
@@ -138,4 +211,31 @@ pub fn compile_func(
     let mut ctx = Context::for_function(func);
     module.define_function(func_id, &mut ctx).unwrap();
     Ok(func_id)
+}
+
+/// Map of a global symbol
+#[derive(Debug, Clone, Default)]
+pub struct SymbolTable {
+    /// Map from function name to Id and signature of the function
+    funcs: HashMap<String, (u32, Signature)>,
+    prev_index: u32,
+}
+
+impl SymbolTable {
+    /// Get the signature of a function by its name
+    pub fn func(&self, name: &str) -> Option<&(u32, Signature)> {
+        self.funcs.get(name)
+    }
+
+    /// Add a new function to the symbols, returns index of the function
+    /// returns `Err(())` if the symbol existed, otherwise returns `Ok(index)`
+    #[inline(always)]
+    pub fn add_func(&mut self, name: String, sig: Signature) -> Result<u32, ()> {
+        let index = self.prev_index;
+        self.prev_index += 1;
+        match self.funcs.insert(name, (index, sig)) {
+            Some(..) => Err(()),
+            None => Ok(index),
+        }
+    }
 }

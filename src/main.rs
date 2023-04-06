@@ -5,6 +5,7 @@ use std::{fs, sync::Arc};
 use ast::Expr;
 use cranelift_codegen::settings;
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use gen::SymbolTable;
 
 use crate::token::TokenStream;
 
@@ -14,10 +15,15 @@ mod scan;
 mod token;
 
 fn main() {
-    let func_expr = {
-        let ast = parse_ast("fn main() = { a = 255 + 3 * 4; b = 256 + a; 0 };");
-        ast.into_iter().next().unwrap().into_fn().unwrap()
-    };
+    let ast = parse_stuff(r#"
+fn blyat(a) = {
+    0
+};
+fn main() = {
+    blyat(255);
+    0
+};
+"#);
     let isa = cranelift_native::builder()
         .expect("Error getting the native ISA")
         .finish(settings::Flags::new(settings::builder()))
@@ -31,7 +37,11 @@ fn main() {
         .unwrap();
         ObjectModule::new(obj_builder)
     };
-    gen::compile_func(&mut module, func_expr).unwrap();
+    let mut symbols = SymbolTable::default();
+    ast.into_iter().for_each(|e| {
+        let f = e.into_fn().unwrap();
+        gen::compile_func(&mut module, &mut symbols, f).unwrap();
+    });
     let obj = module.finish();
     let bytes = obj.emit().unwrap();
     write_bytes_to_file("output.o", bytes.as_ref()).unwrap();
@@ -42,7 +52,7 @@ fn write_bytes_to_file(path: &str, buf: &[u8]) -> std::io::Result<()> {
     std::io::prelude::Write::write_all(&mut file, buf)
 }
 
-fn parse_ast(s: &'static str) -> Vec<Expr> {
+fn parse_stuff(s: &'static str) -> Vec<Expr> {
     let tokens = TokenStream::from_str(s).peekable();
     ast::parse(tokens)
 }

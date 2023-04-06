@@ -50,9 +50,9 @@ impl Expr {
     #[allow(dead_code)]
     #[must_use]
     #[inline(always)]
-    pub fn as_id(&self) -> Option<&String> {
+    pub fn as_id(&self) -> Option<&str> {
         if let Self::Id(v) = self {
-            Some(v)
+            Some(v.as_str())
         } else {
             None
         }
@@ -140,7 +140,6 @@ fn parse_call_args(tokens: &mut Peekable<TokenStream>) -> Option<Vec<Expr>> {
             _ => panic!("Expects `,` or `)`"),
         }
     }
-    println!("{:?}", tokens.peek()?);
     tokens.next();
     Some(args)
 }
