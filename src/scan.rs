@@ -1,39 +1,56 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 use cranelift::prelude::EntityRef;
+use cranelift_codegen::ir::FuncRef;
 use cranelift_frontend::Variable;
 
 use crate::ast::Expr;
 
 #[derive(Clone, Default)]
 pub struct VarTable<'e> {
-    set: HashMap<&'e str, Variable>,
+    imported_funcs: HashMap<&'e str, FuncRef>,
+    vars: HashMap<&'e str, Variable>,
 }
 
 impl<'e> std::fmt::Debug for VarTable<'e> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.set.fmt(f)
+        self.vars.fmt(f)
     }
 }
 
 impl<'e> VarTable<'e> {
     pub fn iter<'a: 'e>(&'a self) -> impl Iterator<Item = (&'e str, Variable)> {
-        self.set.iter().map(|(&name, &var)| (name, var))
+        self.vars.iter().map(|(&name, &var)| (name, var))
     }
 
     #[allow(dead_code)]
     pub fn var(&self, name: &'e str) -> Option<Variable> {
-        self.set.get(name).copied()
+        self.vars.get(name).copied()
     }
 
     pub fn expect_exist(&self, name: &'e str) -> Variable {
-        self.set.get(name).copied().unwrap_or_else(|| {
+        self.vars.get(name).copied().unwrap_or_else(|| {
             panic!(
                 "Variable does not exist: `{}`, var table: {:?}",
                 name.escape_debug(),
-                self.set
+                self.vars
             )
         })
+    }
+
+    /// If a function is already imported, return the index and ref to that function, if not,
+    /// execute the closure, add the returned index and ref to the map and return it
+    #[inline(always)]
+    #[must_use]
+    pub fn import_func_if_needed(
+        &mut self,
+        name: &'e str,
+        mut f: impl FnMut() -> FuncRef,
+    ) -> FuncRef {
+        match self.imported_funcs.entry(name) {
+            Entry::Occupied(o) => *o.get(),
+            Entry::Vacant(v) => *v.insert(f()),
+        }
     }
 }
 
@@ -58,7 +75,7 @@ pub fn scan_func<'e>(body: &'e Expr) -> VarTable<'e> {
     let mut result = VarTable::<'e>::default();
     let mut id = 0usize;
     recursive_scan_assign(body, &mut |name| {
-        result.set.insert(name, Variable::new(id));
+        result.vars.insert(name, Variable::new(id));
         id += 1;
     });
     result
