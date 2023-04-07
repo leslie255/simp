@@ -16,12 +16,12 @@ mod token;
 
 fn main() {
     let ast = parse_stuff(r#"
-fn blyat(a) = {
-    16
+fn identity(a) = {
+    a
 };
 fn main() = {
-    blyat(255);
-    x = blyat(blyat(255));
+    identity(255);
+    x = identity(identity(128));
     0
 };
 "#);

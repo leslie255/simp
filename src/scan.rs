@@ -19,13 +19,14 @@ impl<'e> std::fmt::Debug for VarTable<'e> {
 }
 
 impl<'e> VarTable<'e> {
-    pub fn iter<'a: 'e>(&'a self) -> impl Iterator<Item = (&'e str, Variable)> {
-        self.vars.iter().map(|(&name, &var)| (name, var))
-    }
-
     #[allow(dead_code)]
     pub fn var(&self, name: &'e str) -> Option<Variable> {
         self.vars.get(name).copied()
+    }
+
+    /// Append a new variable into the vars map, assuming that it did not exist in the map
+    pub fn append_var(&mut self, name: &'e str, var: Variable) {
+        self.vars.insert(name, var);
     }
 
     pub fn expect_exist(&self, name: &'e str) -> Variable {
@@ -52,6 +53,18 @@ impl<'e> VarTable<'e> {
             Entry::Vacant(v) => *v.insert(f()),
         }
     }
+
+    /// Recursively through a function and creates a table of all its variables, while executing a
+    /// function for every variable definition it finds
+    pub fn scan_func(&mut self, body: &'e Expr, mut f: impl FnMut(&'e str, Variable)) {
+        let mut id = self.vars.len();
+        recursive_scan_assign(body, &mut |name| {
+            let var = Variable::new(id);
+            self.vars.insert(name, var);
+            f(name, var);
+            id += 1;
+        });
+    }
 }
 
 fn recursive_scan_assign<'e>(expr: &'e Expr, f: &mut impl FnMut(&'e str)) {
@@ -69,14 +82,4 @@ fn recursive_scan_assign<'e>(expr: &'e Expr, f: &mut impl FnMut(&'e str)) {
         Expr::While(_, _) => todo!(),
         _ => (),
     }
-}
-
-pub fn scan_func<'e>(body: &'e Expr) -> VarTable<'e> {
-    let mut result = VarTable::<'e>::default();
-    let mut id = 0usize;
-    recursive_scan_assign(body, &mut |name| {
-        result.vars.insert(name, Variable::new(id));
-        id += 1;
-    });
-    result
 }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use cranelift::prelude::{
-    types::I64, AbiParam, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
+    types::I64, AbiParam, EntityRef, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
 };
 use cranelift_codegen::{
     ir::{FuncRef, Function, UserExternalName, UserFuncName},
@@ -11,14 +11,11 @@ use cranelift_codegen::{
     verifier::VerifierResult,
     verify_function, Context,
 };
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
-use crate::{
-    ast::Expr,
-    scan::{scan_func, VarTable},
-};
+use crate::{ast::Expr, scan::VarTable};
 
 /// Codegen for things that can be used as an operand
 /// e.g. number literal, identifier, lhs + rhs, if-else block, ...
@@ -188,9 +185,9 @@ fn make_func_signature(args: &Vec<String>) -> Signature {
 pub fn compile_func(
     module: &mut ObjectModule,
     symbols: &mut SymbolTable,
-    (name, args, body): (String, Vec<String>, Option<Box<Expr>>),
+    (name, arg_names, body): (String, Vec<String>, Option<Box<Expr>>),
 ) -> VerifierResult<FuncId> {
-    let sig = make_func_signature(&args);
+    let sig = make_func_signature(&arg_names);
     let mut fn_builder_ctx = FunctionBuilderContext::new();
     let func_id = module
         .declare_function(&name, Linkage::Export, &sig)
@@ -202,22 +199,28 @@ pub fn compile_func(
         Some(x) => x,
         None => return Ok(func_id),
     };
-    let mut var_table = scan_func(&body);
     let mut func = Function::with_name_signature(UserFuncName::user(0, func_index), sig);
-    let mut fn_builder = FunctionBuilder::new(&mut func, &mut fn_builder_ctx);
-    var_table
-        .iter()
-        .for_each(|(_, var)| fn_builder.declare_var(var, I64));
-    let block0 = fn_builder.create_block();
-    fn_builder.append_block_params_for_function_params(block0);
-    fn_builder.switch_to_block(block0);
-    fn_builder.seal_block(block0);
+    let mut builder = FunctionBuilder::new(&mut func, &mut fn_builder_ctx);
+    let mut var_table = VarTable::default();
+    let entry_block = builder.create_block();
+    builder.append_block_params_for_function_params(entry_block);
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+    arg_names.iter().enumerate().for_each(|(i, name)| {
+        let var = Variable::new(i);
+        let val = *unsafe { builder.block_params(entry_block).get_unchecked(i) };
+        dbg!(var, val, name);
+        var_table.append_var(&name, var);
+        builder.declare_var(var, I64);
+        builder.def_var(var, val);
+    });
+    var_table.scan_func(&body, |_, var| builder.declare_var(var, I64));
     body.as_block()
         .expect("Single expression functions isn't supported yet")
         .into_iter()
-        .for_each(|e| gen_statement(&mut fn_builder, symbols, &mut var_table, e));
+        .for_each(|e| gen_statement(&mut builder, symbols, &mut var_table, e));
 
-    fn_builder.finalize();
+    builder.finalize();
     println!("{}", func.display());
     verify_function(&func, module.isa().flags())?;
     let mut ctx = Context::for_function(func);
