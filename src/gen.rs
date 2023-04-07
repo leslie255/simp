@@ -143,10 +143,8 @@ fn gen_if_else<'e>(
 
     // merged block
     builder.switch_to_block(merged_block);
-    let merged_val = builder.append_block_param(merged_block, I64);
     builder.seal_block(merged_block);
-
-    merged_val
+    builder.append_block_param(merged_block, I64)
 }
 
 /// Imports an user-defined external function to a function, returns the signature of the imported

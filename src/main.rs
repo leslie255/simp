@@ -28,7 +28,6 @@ fn main() = {
 };
 "#,
     );
-    dbg!(&ast);
     let mut obj_module = {
         let isa = cranelift_native::builder()
             .expect("Error getting the native ISA")
