@@ -23,15 +23,19 @@ fn identity(a) = {
 fn main() = {
     identity(255);
     x = identity(identity(128));
-    0
+    y = {
+        num = identity(69);
+        num
+    };
+    y
 };
 "#,
     );
-    let isa = cranelift_native::builder()
-        .expect("Error getting the native ISA")
-        .finish(settings::Flags::new(settings::builder()))
-        .unwrap();
-    let mut module = {
+    let mut obj_module = {
+        let isa = cranelift_native::builder()
+            .expect("Error getting the native ISA")
+            .finish(settings::Flags::new(settings::builder()))
+            .unwrap();
         let obj_builder = ObjectBuilder::new(
             Arc::clone(&isa),
             "output",
@@ -43,10 +47,12 @@ fn main() = {
     let mut symbols = GlobalSymbols::default();
     ast.into_iter().for_each(|e| {
         let f = e.into_fn().unwrap();
-        gen::compile_func(&mut module, &mut symbols, f).unwrap();
+        gen::compile_func(&mut obj_module, &mut symbols, f).unwrap();
     });
-    let obj = module.finish();
-    let bytes = obj.emit().unwrap();
+    let bytes = {
+        let obj = obj_module.finish();
+        obj.emit().unwrap()
+    };
     write_bytes_to_file("output.o", bytes.as_ref()).unwrap();
 }
 

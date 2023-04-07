@@ -4,7 +4,7 @@ use cranelift::prelude::{
     types::I64, AbiParam, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
 };
 use cranelift_codegen::{
-    ir::{FuncRef, Function, UserExternalName, UserFuncName},
+    ir::{condcodes::IntCC, FuncRef, Function, UserExternalName, UserFuncName},
     isa::CallConv,
     verifier::VerifierResult,
     verify_function, Context,
@@ -35,51 +35,48 @@ fn declare_var<'e>(
 fn gen_operand<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     symbols: &mut GlobalSymbols,
-    var_table: &mut LocalSymbols<'e>,
+    local: &mut LocalSymbols<'e>,
     expr: &'e Expr,
 ) -> Value {
+    macro_rules! bin_op {
+        ($f:ident, $lhs:expr, $rhs:expr $(,)?) => {{
+            let lhs = gen_operand(builder, symbols, local, $lhs.as_ref());
+            let rhs = gen_operand(builder, symbols, local, $rhs.as_ref());
+            builder.ins().$f(lhs, rhs)
+        }};
+    }
+    macro_rules! cmp {
+        ($cmp:path, $lhs:expr, $rhs:expr $(,)?) => {{
+            let lhs = gen_operand(builder, symbols, local, $lhs.as_ref());
+            let rhs = gen_operand(builder, symbols, local, $rhs.as_ref());
+            builder.ins().icmp($cmp, lhs, rhs)
+        }};
+    }
     match expr {
-        Expr::Id(id) => builder.use_var(var_table.expect_var(id.as_str())),
+        Expr::Id(id) => builder.use_var(local.expect_var(id.as_str())),
         &Expr::Num(num) => builder.ins().iconst(I64, num),
-        Expr::Eq(_, _) => todo!(),
-        Expr::NEq(_, _) => todo!(),
-        Expr::Le(_, _) => todo!(),
-        Expr::LeEq(_, _) => todo!(),
-        Expr::Gr(_, _) => todo!(),
-        Expr::GrEq(_, _) => todo!(),
+        Expr::Eq(lhs, rhs) => cmp!(IntCC::Equal, lhs, rhs),
+        Expr::NEq(lhs, rhs) => cmp!(IntCC::NotEqual, lhs, rhs),
+        Expr::Le(lhs, rhs) => cmp!(IntCC::SignedLessThan, lhs, rhs),
+        Expr::LeEq(lhs, rhs) => cmp!(IntCC::SignedLessThanOrEqual, lhs, rhs),
+        Expr::Gr(lhs, rhs) => cmp!(IntCC::SignedGreaterThan, lhs, rhs),
+        Expr::GrEq(lhs, rhs) => cmp!(IntCC::SignedLessThanOrEqual, lhs, rhs),
         Expr::Not(_) => todo!(),
-        Expr::UnaryAdd(e) => gen_operand(builder, symbols, var_table, e),
-        Expr::UnarySub(_) => todo!(),
-        Expr::Add(lhs, rhs) => {
-            let lhs = gen_operand(builder, symbols, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, symbols, var_table, rhs.as_ref());
-            builder.ins().iadd(lhs, rhs)
+        Expr::UnaryAdd(e) => gen_operand(builder, symbols, local, e),
+        Expr::UnarySub(e) => {
+            let val = gen_operand(builder, symbols, local, e);
+            builder.ins().ineg(val)
         }
-        Expr::Sub(lhs, rhs) => {
-            let lhs = gen_operand(builder, symbols, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, symbols, var_table, rhs.as_ref());
-            builder.ins().isub(lhs, rhs)
-        }
-        Expr::Mul(lhs, rhs) => {
-            let lhs = gen_operand(builder, symbols, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, symbols, var_table, rhs.as_ref());
-            builder.ins().imul(lhs, rhs)
-        }
-        Expr::Div(lhs, rhs) => {
-            let lhs = gen_operand(builder, symbols, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, symbols, var_table, rhs.as_ref());
-            builder.ins().sdiv(lhs, rhs)
-        }
-        Expr::Mod(lhs, rhs) => {
-            let lhs = gen_operand(builder, symbols, var_table, lhs.as_ref());
-            let rhs = gen_operand(builder, symbols, var_table, rhs.as_ref());
-            builder.ins().srem(lhs, rhs)
-        }
+        Expr::Add(lhs, rhs) => bin_op!(iadd, lhs, rhs),
+        Expr::Sub(lhs, rhs) => bin_op!(isub, lhs, rhs),
+        Expr::Mul(lhs, rhs) => bin_op!(imul, lhs, rhs),
+        Expr::Div(lhs, rhs) => bin_op!(sdiv, lhs, rhs),
+        Expr::Mod(lhs, rhs) => bin_op!(srem, lhs, rhs),
         Expr::And(_, _) => todo!(),
         Expr::Or(_, _) => todo!(),
-        Expr::Block(_) => todo!(),
+        Expr::Block(body) => gen_block(builder, symbols, local, body),
         Expr::IfElse(_, _, _) => todo!(),
-        Expr::Call(callee, args) => gen_call(builder, symbols, var_table, callee, args),
+        Expr::Call(callee, args) => gen_call(builder, symbols, local, callee, args),
         e => panic!("Expression {e:?} not allowed as rhs of assignment"),
     }
 }
@@ -163,6 +160,42 @@ fn gen_tail<'f, 'e>(
 ) {
     let val = gen_operand(builder, symbols, var_table, expr);
     builder.ins().return_(&[val]);
+}
+
+fn gen_block<'f, 'e>(
+    builder: &mut FunctionBuilder<'f>,
+    symbols: &mut GlobalSymbols,
+    local: &mut LocalSymbols<'e>,
+    body: &'e [Expr],
+) -> Value {
+    match body {
+        [] => builder.ins().iconst(I64, 0),
+        [expr] => match expr {
+            Expr::Tail(expr) => gen_operand(builder, symbols, local, &expr),
+            expr => {
+                gen_statement(builder, symbols, local, &expr);
+                builder.ins().iconst(I64, 0)
+            }
+        },
+        body => {
+            local.enters_block();
+            unsafe { body.get_unchecked(0..body.len() - 1) }
+                .iter()
+                .for_each(|expr| {
+                    gen_statement(builder, symbols, local, expr);
+                });
+            let last = unsafe { body.get_unchecked(body.len() - 1) };
+            let val = match last {
+                Expr::Tail(expr) => gen_operand(builder, symbols, local, &expr),
+                expr => {
+                    gen_statement(builder, symbols, local, &expr);
+                    builder.ins().iconst(I64, 0)
+                }
+            };
+            local.leaves_block();
+            val
+        }
+    }
 }
 
 fn gen_statement<'f, 'e>(

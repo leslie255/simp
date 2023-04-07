@@ -5,41 +5,63 @@ use cranelift_codegen::ir::FuncRef;
 use cranelift_frontend::Variable;
 
 /// Keep track of symbols inside a function, includeing variables and imported functions
-#[derive(Clone, Default)]
+#[derive(Clone, Debug)]
 pub struct LocalSymbols<'e> {
     imported_funcs: HashMap<&'e str, FuncRef>,
-    vars: HashMap<&'e str, Variable>,
+    vars: Vec<HashMap<&'e str, Variable>>,
     next_var_id: usize,
 }
 
-impl<'e> std::fmt::Debug for LocalSymbols<'e> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.vars.fmt(f)
+impl<'e> Default for LocalSymbols<'e> {
+    fn default() -> Self {
+        Self {
+            imported_funcs: HashMap::default(),
+            vars: vec![HashMap::default()],
+            next_var_id: 0,
+        }
     }
 }
 
 impl<'e> LocalSymbols<'e> {
+    fn var_stack_top_mut(&mut self) -> &mut HashMap<&'e str, Variable> {
+        self.vars.last_mut().expect("Local symbol stack is empty")
+    }
+
+    fn _var_stack_top(&self) -> &HashMap<&'e str, Variable> {
+        self.vars.last().expect("Local symbol stack is empty")
+    }
+
     /// Returns a variable if it exists
-    #[allow(dead_code)]
     pub fn var(&self, name: &'e str) -> Option<Variable> {
-        self.vars.get(name).copied()
+        self.vars
+            .iter()
+            .rev()
+            .find_map(|vars| vars.get(name))
+            .copied()
+    }
+
+    pub fn enters_block(&mut self) {
+        self.vars.push(HashMap::new());
+    }
+
+    pub fn leaves_block(&mut self) {
+        self.vars.pop();
     }
 
     /// Creates a new variable and add that to the symbols
-    pub fn create_var(&mut self,name: &'e str) -> Variable {
+    pub fn create_var(&mut self, name: &'e str) -> Variable {
         let var = Variable::new(self.next_var_id);
-        self.vars.insert(name, var);
+        self.var_stack_top_mut().insert(name, var);
         self.next_var_id += 1;
         var
     }
 
+    /// Returns the variable of `name`, or exits with an error message if a variable of the
+    /// provided name is not found
     pub fn expect_var(&self, name: &'e str) -> Variable {
-        self.vars.get(name).copied().unwrap_or_else(|| {
-            panic!(
-                "Variable does not exist: `{}`, var table: {:?}",
-                name.escape_debug(),
-                self.vars
-            )
+        self.var(name).unwrap_or_else(|| {
+            println!("Variable does not exist: `{}`", name);
+            std::process::exit(255);
         })
     }
 
