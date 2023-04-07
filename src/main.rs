@@ -5,17 +5,18 @@ use std::{fs, sync::Arc};
 use ast::Expr;
 use cranelift_codegen::settings;
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use gen::SymbolTable;
+use symbols::GlobalSymbols;
 
 use crate::token::TokenStream;
 
 mod ast;
 mod gen;
-mod scan;
+mod symbols;
 mod token;
 
 fn main() {
-    let ast = parse_stuff(r#"
+    let ast = parse_stuff(
+        r#"
 fn identity(a) = {
     a
 };
@@ -24,7 +25,8 @@ fn main() = {
     x = identity(identity(128));
     0
 };
-"#);
+"#,
+    );
     let isa = cranelift_native::builder()
         .expect("Error getting the native ISA")
         .finish(settings::Flags::new(settings::builder()))
@@ -38,7 +40,7 @@ fn main() = {
         .unwrap();
         ObjectModule::new(obj_builder)
     };
-    let mut symbols = SymbolTable::default();
+    let mut symbols = GlobalSymbols::default();
     ast.into_iter().for_each(|e| {
         let f = e.into_fn().unwrap();
         gen::compile_func(&mut module, &mut symbols, f).unwrap();

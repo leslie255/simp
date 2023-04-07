@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-
 use cranelift::prelude::{
-    types::I64, AbiParam, EntityRef, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
+    types::I64, AbiParam, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
 };
 use cranelift_codegen::{
     ir::{FuncRef, Function, UserExternalName, UserFuncName},
@@ -15,18 +13,33 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
-use crate::{ast::Expr, scan::VarTable};
+use crate::{
+    ast::Expr,
+    symbols::{GlobalSymbols, LocalSymbols},
+};
+
+/// Declares a new variable in the local symbol space and in the function builder
+#[inline(always)]
+fn declare_var<'e>(
+    builder: &mut FunctionBuilder<'_>,
+    local: &mut LocalSymbols<'e>,
+    name: &'e str,
+) -> Variable {
+    let var = local.create_var(name);
+    builder.declare_var(var, I64);
+    var
+}
 
 /// Codegen for things that can be used as an operand
 /// e.g. number literal, identifier, lhs + rhs, if-else block, ...
 fn gen_operand<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    symbols: &mut SymbolTable,
-    var_table: &mut VarTable<'e>,
+    symbols: &mut GlobalSymbols,
+    var_table: &mut LocalSymbols<'e>,
     expr: &'e Expr,
 ) -> Value {
     match expr {
-        Expr::Id(id) => builder.use_var(var_table.expect_exist(id.as_str())),
+        Expr::Id(id) => builder.use_var(var_table.expect_var(id.as_str())),
         &Expr::Num(num) => builder.ins().iconst(I64, num),
         Expr::Eq(_, _) => todo!(),
         Expr::NEq(_, _) => todo!(),
@@ -73,16 +86,17 @@ fn gen_operand<'f, 'e>(
 
 fn gen_assign<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    var_table: &mut VarTable<'e>,
-    symbols: &mut SymbolTable,
+    local: &mut LocalSymbols<'e>,
+    symbols: &mut GlobalSymbols,
     lhs: &'e Expr,
     rhs: &'e Expr,
 ) {
     let name = lhs
         .as_id()
         .expect("Expression not allowed as lhs of assignment");
-    let rhs = gen_operand(builder, symbols, var_table, rhs);
-    builder.def_var(var_table.expect_exist(name), rhs)
+    declare_var(builder, local, name);
+    let rhs = gen_operand(builder, symbols, local, rhs);
+    builder.def_var(local.expect_var(name), rhs)
 }
 
 /// Imports an user-defined external function to a function, returns the signature of the imported
@@ -90,8 +104,8 @@ fn gen_assign<'f, 'e>(
 /// stored in `var_table`
 fn import_func_if_needed<'a, 'e>(
     builder: &mut FunctionBuilder<'_>,
-    symbols: &'a SymbolTable,
-    var_table: &mut VarTable<'e>,
+    symbols: &'a GlobalSymbols,
+    var_table: &mut LocalSymbols<'e>,
     name: &'e str,
 ) -> (&'a Signature, FuncRef) {
     let (index, sig) = symbols.func(name).expect(
@@ -117,8 +131,8 @@ fn import_func_if_needed<'a, 'e>(
 /// Returns the value in which the result of the call is stored
 fn gen_call<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    symbols: &mut SymbolTable,
-    var_table: &mut VarTable<'e>,
+    symbols: &mut GlobalSymbols,
+    var_table: &mut LocalSymbols<'e>,
     callee: &'e Expr,
     args: &'e Vec<Expr>,
 ) -> Value {
@@ -143,8 +157,8 @@ fn gen_call<'f, 'e>(
 
 fn gen_tail<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    symbols: &mut SymbolTable,
-    var_table: &mut VarTable<'e>,
+    symbols: &mut GlobalSymbols,
+    var_table: &mut LocalSymbols<'e>,
     expr: &'e Expr,
 ) {
     let val = gen_operand(builder, symbols, var_table, expr);
@@ -153,8 +167,8 @@ fn gen_tail<'f, 'e>(
 
 fn gen_statement<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    symbols: &mut SymbolTable,
-    var_table: &mut VarTable<'e>,
+    symbols: &mut GlobalSymbols,
+    var_table: &mut LocalSymbols<'e>,
     expr: &'e Expr,
 ) {
     match expr {
@@ -184,7 +198,7 @@ fn make_func_signature(args: &Vec<String>) -> Signature {
 
 pub fn compile_func(
     module: &mut ObjectModule,
-    symbols: &mut SymbolTable,
+    symbols: &mut GlobalSymbols,
     (name, arg_names, body): (String, Vec<String>, Option<Box<Expr>>),
 ) -> VerifierResult<FuncId> {
     let sig = make_func_signature(&arg_names);
@@ -201,24 +215,21 @@ pub fn compile_func(
     };
     let mut func = Function::with_name_signature(UserFuncName::user(0, func_index), sig);
     let mut builder = FunctionBuilder::new(&mut func, &mut fn_builder_ctx);
-    let mut var_table = VarTable::default();
+    let mut local = LocalSymbols::default();
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
     arg_names.iter().enumerate().for_each(|(i, name)| {
-        let var = Variable::new(i);
+        let var = local.create_var(name);
         let val = *unsafe { builder.block_params(entry_block).get_unchecked(i) };
-        dbg!(var, val, name);
-        var_table.append_var(&name, var);
         builder.declare_var(var, I64);
         builder.def_var(var, val);
     });
-    var_table.scan_func(&body, |_, var| builder.declare_var(var, I64));
     body.as_block()
         .expect("Single expression functions isn't supported yet")
         .into_iter()
-        .for_each(|e| gen_statement(&mut builder, symbols, &mut var_table, e));
+        .for_each(|e| gen_statement(&mut builder, symbols, &mut local, e));
 
     builder.finalize();
     println!("{}", func.display());
@@ -226,31 +237,4 @@ pub fn compile_func(
     let mut ctx = Context::for_function(func);
     module.define_function(func_id, &mut ctx).unwrap();
     Ok(func_id)
-}
-
-/// Map of a global symbol
-#[derive(Debug, Clone, Default)]
-pub struct SymbolTable {
-    /// Map from function name to Id and signature of the function
-    funcs: HashMap<String, (u32, Signature)>,
-    prev_index: u32,
-}
-
-impl SymbolTable {
-    /// Get the signature of a function by its name
-    pub fn func(&self, name: &str) -> Option<&(u32, Signature)> {
-        self.funcs.get(name)
-    }
-
-    /// Add a new function to the symbols, returns index of the function
-    /// returns `Err(())` if the symbol existed, otherwise returns `Ok(index)`
-    #[inline(always)]
-    pub fn add_func(&mut self, name: String, sig: Signature) -> Result<u32, ()> {
-        let index = self.prev_index;
-        self.prev_index += 1;
-        match self.funcs.insert(name, (index, sig)) {
-            Some(..) => Err(()),
-            None => Ok(index),
-        }
-    }
 }
