@@ -56,6 +56,13 @@ impl<'e> LocalSymbols<'e> {
         var
     }
 
+    /// Create an anonymous variable which the variable table does not keep track of in its map
+    pub fn create_anon_var(&mut self) -> Variable {
+        let var = Variable::new(self.next_var_id);
+        self.next_var_id += 1;
+        var
+    }
+
     /// Returns the variable of `name`, or exits with an error message if a variable of the
     /// provided name is not found
     pub fn expect_var(&self, name: &'e str) -> Variable {

@@ -18,18 +18,17 @@ mod token;
 fn main() {
     let ast = parse_stuff(
         r#"
-fn identity(x) = x;
 fn main() = {
-    identity(255);
-    x = identity(identity(128));
-    y = {
-        num = identity(69);
-        num
+    x = if 1 {
+        255
+    } else {
+        256
     };
-    y
+    x
 };
 "#,
     );
+    dbg!(&ast);
     let mut obj_module = {
         let isa = cranelift_native::builder()
             .expect("Error getting the native ISA")

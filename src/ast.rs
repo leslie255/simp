@@ -60,7 +60,7 @@ impl Expr {
 
     #[must_use]
     #[inline(always)]
-    pub fn as_block(&self) -> Option<&Vec<Expr>> {
+    pub fn as_block<'a>(&'a self) -> Option<&'a [Expr]> {
         if let Self::Block(v) = self {
             Some(v)
         } else {
@@ -80,7 +80,6 @@ fn parse_block(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
                 tokens.next();
             }
             Token::BraceClose => {
-                tokens.next();
                 body.push(Expr::Tail(Box::new(expr)));
                 break;
             }
