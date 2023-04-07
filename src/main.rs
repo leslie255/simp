@@ -4,6 +4,7 @@ use std::{fs, sync::Arc};
 
 use ast::Expr;
 use cranelift_codegen::settings;
+use cranelift_frontend::FunctionBuilderContext;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use symbols::GlobalSymbols;
 
@@ -17,9 +18,7 @@ mod token;
 fn main() {
     let ast = parse_stuff(
         r#"
-fn identity(a) = {
-    a
-};
+fn identity(x) = x;
 fn main() = {
     identity(255);
     x = identity(identity(128));
@@ -45,9 +44,10 @@ fn main() = {
         ObjectModule::new(obj_builder)
     };
     let mut symbols = GlobalSymbols::default();
+    let mut fn_builder_ctx = FunctionBuilderContext::new();
     ast.into_iter().for_each(|e| {
         let f = e.into_fn().unwrap();
-        gen::compile_func(&mut obj_module, &mut symbols, f).unwrap();
+        gen::compile_func(&mut obj_module, &mut symbols, &mut fn_builder_ctx, f).unwrap();
     });
     let bytes = {
         let obj = obj_module.finish();

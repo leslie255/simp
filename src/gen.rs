@@ -212,7 +212,6 @@ fn gen_statement<'f, 'e>(
         Expr::Block(_) => todo!(),
         Expr::IfElse(_, _, _) => todo!(),
         Expr::While(_, _) => todo!(),
-        Expr::Tail(expr) => gen_tail(builder, symbols, var_table, expr),
         _ => panic!("Expression not allowed as a statement"),
     }
 }
@@ -220,22 +219,28 @@ fn gen_statement<'f, 'e>(
 #[inline(always)]
 #[must_use]
 fn make_func_signature(args: &Vec<String>) -> Signature {
-    let mut sign = Signature::new(CallConv::SystemV);
-    sign.params.reserve(args.len());
+    let mut sig = Signature::new(CallConv::SystemV);
+    sig.params.reserve(args.len());
     (0..args.len()).for_each(|_| {
-        sign.params.push(AbiParam::new(I64));
+        sig.params.push(AbiParam::new(I64));
     });
-    sign.returns.push(AbiParam::new(I64));
-    sign
+    sig.returns.push(AbiParam::new(I64));
+    sig
+}
+
+#[inline(always)]
+fn add_func_to_module(func_id: FuncId, func: Function, module: &mut ObjectModule) {
+    let mut ctx = Context::for_function(func);
+    module.define_function(func_id, &mut ctx).unwrap();
 }
 
 pub fn compile_func(
     module: &mut ObjectModule,
     symbols: &mut GlobalSymbols,
+    builder_ctx: &mut FunctionBuilderContext,
     (name, arg_names, body): (String, Vec<String>, Option<Box<Expr>>),
-) -> VerifierResult<FuncId> {
+) -> VerifierResult<()> {
     let sig = make_func_signature(&arg_names);
-    let mut fn_builder_ctx = FunctionBuilderContext::new();
     let func_id = module
         .declare_function(&name, Linkage::Export, &sig)
         .unwrap();
@@ -244,30 +249,31 @@ pub fn compile_func(
         .expect("Redefinition of function");
     let body = match body {
         Some(x) => x,
-        None => return Ok(func_id),
+        None => return Ok(()),
     };
     let mut func = Function::with_name_signature(UserFuncName::user(0, func_index), sig);
-    let mut builder = FunctionBuilder::new(&mut func, &mut fn_builder_ctx);
+    let mut builder = FunctionBuilder::new(&mut func, builder_ctx);
     let mut local = LocalSymbols::default();
-    let entry_block = builder.create_block();
-    builder.append_block_params_for_function_params(entry_block);
-    builder.switch_to_block(entry_block);
-    builder.seal_block(entry_block);
+    let entry_block = {
+        let b = builder.create_block();
+        builder.append_block_params_for_function_params(b);
+        builder.switch_to_block(b);
+        builder.seal_block(b);
+        b
+    };
     arg_names.iter().enumerate().for_each(|(i, name)| {
         let var = local.create_var(name);
         let val = *unsafe { builder.block_params(entry_block).get_unchecked(i) };
         builder.declare_var(var, I64);
         builder.def_var(var, val);
     });
-    body.as_block()
-        .expect("Single expression functions isn't supported yet")
-        .into_iter()
-        .for_each(|e| gen_statement(&mut builder, symbols, &mut local, e));
+
+    let return_val = gen_operand(&mut builder, symbols, &mut local, &body);
+    builder.ins().return_(&[return_val]);
 
     builder.finalize();
     println!("{}", func.display());
     verify_function(&func, module.isa().flags())?;
-    let mut ctx = Context::for_function(func);
-    module.define_function(func_id, &mut ctx).unwrap();
-    Ok(func_id)
+    add_func_to_module(func_id, func, module);
+    Ok(())
 }
