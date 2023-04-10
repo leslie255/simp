@@ -615,7 +615,7 @@ fn gen_statement<'f, 'e>(
         Expr::Continue => {
             let continue_block = local
                 .parent_loop()
-                .expect("Using `break` outside of a loop")
+                .expect("Using `continue` outside of a loop")
                 .continue_block;
             builder.ins().jump(continue_block, &[]);
             return false;

@@ -21,9 +21,11 @@ fn main() {
 fn identity(x) = x;
 fn main() = {
     identity(0);
-    (a, b) = loop {
+    (a, b) = if 1 {
         c = 255;
-        break (c, 256);
+        (c, 256)
+    } else {
+        (0, 1)
     };
     a
 };
