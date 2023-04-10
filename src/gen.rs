@@ -98,7 +98,6 @@ impl Value {
         }
     }
 
-
     /// Returns a temporary `ValueDisplay` object for printing a description of SIMP values,
     /// used in error messages.
     /// Formats to
@@ -315,30 +314,25 @@ fn gen_assign_tuple<'e>(
     match rhs {
         Expr::Tuple(rhs) => {
             lhs.iter().zip(rhs).for_each(|(lhs, rhs)| {
-                gen_assign(builder, local, global, lhs, rhs);
+                gen_assign_var(
+                    builder,
+                    local,
+                    global,
+                    lhs.as_id().expect("Nested tuples are not allowed"),
+                    rhs,
+                );
             });
         }
-        Expr::IfElse(cond, if_block, else_block) => {
-            let rhs = gen_if_else(
-                builder,
-                global,
-                local,
-                cond,
-                if_block.as_block().unwrap(),
-                else_block
-                    .as_ref()
-                    .map(|e| e.as_block().unwrap())
-                    .unwrap_or(&[]),
-            );
+        expr => {
+            let rhs = gen_operand(builder, global, local, expr);
             lhs.iter()
                 .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as lhs of an assignment"))
                 .zip(rhs.values())
-                .for_each(|(id,rhs)| {
+                .for_each(|(id, rhs)| {
                     let var = declare_var(builder, local, id);
                     builder.def_var(var, rhs);
                 });
         }
-        _ => todo!(),
     }
 }
 
@@ -347,10 +341,9 @@ fn gen_loop<'e>(
     global: &mut GlobalSymbols,
     local: &mut LocalContext<'e>,
     body: &'e [Expr],
-) -> ClifValue {
+) -> Value {
     let loop_block = builder.create_block();
     let break_block = builder.create_block();
-    let break_val = builder.append_block_param(break_block, I64);
 
     local.enters_loop(break_block, loop_block);
 
@@ -371,6 +364,16 @@ fn gen_loop<'e>(
     // break block
     builder.switch_to_block(break_block);
     builder.seal_block(break_block);
+    let loop_info = unsafe { local.parent_loop().unwrap_unchecked() };
+    let break_val = match loop_info.val_count {
+        0 => Value::Empty,
+        1 => builder.append_block_param(break_block, I64).into(),
+        x => (0..x)
+            .into_iter()
+            .map(|_| builder.append_block_param(break_block, I64))
+            .collect::<Vec<ClifValue>>()
+            .into(),
+    };
 
     local.leaves_loop();
 
@@ -599,10 +602,11 @@ fn gen_statement<'f, 'e>(
         }
         Expr::Break(expr) => {
             let val = gen_operand(builder, global, local, &expr);
-            let break_block = local
-                .parent_loop()
-                .expect("Using `break` outside of a loop")
-                .break_block;
+            let parent_loop = local
+                .parent_loop_mut()
+                .expect("Using `break` outside of a loop");
+            parent_loop.check_break_val(val.len());
+            let break_block = parent_loop.break_block;
             builder.ins().jump(break_block, val.as_slice());
             return false;
         }
@@ -614,7 +618,7 @@ fn gen_statement<'f, 'e>(
             builder.ins().jump(continue_block, &[]);
             return false;
         }
-        _ => panic!("Expression not allowed as a statement"),
+        e => panic!("Expression not allowed as a statement: {e:?}"),
     }
     true
 }

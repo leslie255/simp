@@ -19,10 +19,9 @@ fn main() {
     let ast = parse_stuff(
         r#"
 fn main() = {
-    (a, b) = if 0 {
-        (255, 256)
-    } else {
-        (1, 0)
+    (a, b) = loop {
+        c = 255;
+        break (c, 256);
     };
     a
 };

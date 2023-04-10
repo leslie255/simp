@@ -9,6 +9,29 @@ use cranelift_frontend::Variable;
 pub struct LoopInfo {
     pub break_block: Block,
     pub continue_block: Block,
+    /// Number of values the block returns
+    pub val_count: usize,
+}
+
+impl LoopInfo {
+    pub fn new(break_block: Block, continue_block: Block) -> Self {
+        Self {
+            break_block,
+            continue_block,
+            val_count: usize::MAX,
+        }
+    }
+
+    /// If there was a `break` statement previously encountered, check if `new_count` matches the
+    /// old `val_count`, otherwise, set the `val_count` to `new_count`.
+    pub fn check_break_val(&mut self, new_count: usize) -> bool {
+        if self.val_count == usize::MAX {
+            self.val_count = new_count;
+            true
+        } else {
+            self.val_count == new_count
+        }
+    }
 }
 
 /// Keep track of symbols inside a function, includeing variables and imported functions
@@ -57,11 +80,10 @@ impl<'e> LocalContext<'e> {
         self.vars.pop();
     }
 
-    pub fn enters_loop(&mut self, break_block: Block, continue_block: Block) {
-        self.loops.push(LoopInfo {
-            break_block,
-            continue_block,
-        });
+    /// Called when entering a loop.
+    /// Returns the `LoopInfo` object created
+    pub fn enters_loop<'a>(&'a mut self, break_block: Block, continue_block: Block) {
+        self.loops.push(LoopInfo::new(break_block, continue_block));
         self.enters_block();
     }
 
@@ -73,6 +95,11 @@ impl<'e> LocalContext<'e> {
     /// Get the parent loop
     pub fn parent_loop(&mut self) -> Option<LoopInfo> {
         self.loops.last().copied()
+    }
+
+    /// Get a mutable reference to the  parent loop
+    pub fn parent_loop_mut(&mut self) -> Option<&mut LoopInfo> {
+        self.loops.last_mut()
     }
 
     /// Creates a new variable and add that to the symbols
