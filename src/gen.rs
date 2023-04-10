@@ -603,7 +603,9 @@ fn gen_statement<'f, 'e>(
             gen_loop(builder, global, local, body.as_block().unwrap());
         }
         Expr::Break(expr) => {
-            let val = gen_operand(builder, global, local, &expr);
+            let val = expr.as_ref().map_or(Value::Empty, |expr| {
+                gen_operand(builder, global, local, &expr)
+            });
             let parent_loop = local
                 .parent_loop_mut()
                 .expect("Using `break` outside of a loop");

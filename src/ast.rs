@@ -33,11 +33,11 @@ pub enum Expr {
     Fn(String, Vec<String>, Option<Box<Expr>>),
     IfElse(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
     Loop(Box<Expr>),
-    Break(Box<Expr>),
+    Break(Option<Box<Expr>>),
+    Continue,
     Call(Box<Expr>, Vec<Expr>),
     StaticData(String),
     Tail(Box<Expr>),
-    Continue,
 }
 
 impl Expr {
@@ -203,6 +203,14 @@ fn parse_paren(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     }
 }
 
+#[inline(always)]
+fn parse_break(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    match tokens.peek()? {
+        Token::Semicolon | Token::BraceClose => Some(Expr::Break(None)),
+        _ => Some(Expr::Break(Some(Box::new(parse_expr(15, tokens)?)))),
+    }
+}
+
 #[must_use]
 fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
@@ -220,7 +228,7 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::If => parse_if(tokens)?,
         Token::Else => panic!("Unexpected `else`"),
         Token::Loop => parse_loop(tokens)?,
-        Token::Break => Expr::Break(Box::new(parse_expr(15, tokens)?)),
+        Token::Break => parse_break(tokens)?,
         Token::Continue => Expr::Continue,
         Token::Fn => parse_fn(tokens)?,
         Token::ExcEq => panic!("Unexpected `!=`"),
@@ -284,7 +292,9 @@ pub struct AstParser {
 }
 
 impl AstParser {
-    pub fn new(tokens: Peekable<TokenStream>) -> Self { Self { tokens } }
+    pub fn new(tokens: Peekable<TokenStream>) -> Self {
+        Self { tokens }
+    }
 }
 
 impl Iterator for AstParser {
