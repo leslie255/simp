@@ -1,6 +1,6 @@
 #![feature(string_leak)]
 
-use std::{fs, sync::Arc};
+use std::fs;
 
 use ast::AstParser;
 use cranelift_codegen::settings;
@@ -18,16 +18,14 @@ mod token;
 fn main() {
     let ast = make_parser(
         r#"
-fn identity(x) = x;
 fn main() = {
-    identity(0);
-    (a, b) = if 1 {
-        c = 255;
-        (c, 256)
+    let x = 255;
+    if 1 {
+        x = 256;
     } else {
-        (0, 1)
-    };
-    a
+        x = 0;
+    }
+    x
 };
 "#,
     );
@@ -36,12 +34,8 @@ fn main() = {
             .expect("Error getting the native ISA")
             .finish(settings::Flags::new(settings::builder()))
             .unwrap();
-        let obj_builder = ObjectBuilder::new(
-            Arc::clone(&isa),
-            "output",
-            cranelift_module::default_libcall_names(),
-        )
-        .unwrap();
+        let obj_builder =
+            ObjectBuilder::new(isa, "output", cranelift_module::default_libcall_names()).unwrap();
         ObjectModule::new(obj_builder)
     };
     let mut symbols = GlobalSymbols::default();

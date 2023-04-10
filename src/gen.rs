@@ -14,7 +14,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
 use crate::{
-    ast::Expr,
+    ast::{Block as AstBlock, Expr},
     symbols::{GlobalSymbols, LocalContext},
 };
 
@@ -30,7 +30,6 @@ impl Value {
     /// Returns `true` if the value is [`Empty`].
     ///
     /// [`Empty`]: Value::Empty
-    #[allow(dead_code)]
     #[must_use]
     fn is_empty(&self) -> bool {
         matches!(self, Self::Empty)
@@ -53,6 +52,15 @@ impl Value {
                     self.display()
                 );
             }
+        }
+    }
+
+    fn expect_empty(&self) {
+        if !self.is_empty() {
+            panic!(
+                "Expects no return value, but {} is provided",
+                self.display()
+            )
         }
     }
 
@@ -195,23 +203,15 @@ fn gen_operand<'f, 'e>(
 ) -> Value {
     macro_rules! bin_op {
         ($f:ident, $lhs:expr, $rhs:expr $(,)?) => {{
-            let lhs = gen_operand(builder, global, local, $lhs.as_ref())
-                .as_single()
-                .expect("Unary addition operator cannot be used on a tuple");
-            let rhs = gen_operand(builder, global, local, $rhs.as_ref())
-                .as_single()
-                .expect("Unary addition operator cannot be used on a tuple");
+            let lhs = gen_operand(builder, global, local, $lhs.as_ref()).expect_single();
+            let rhs = gen_operand(builder, global, local, $rhs.as_ref()).expect_single();
             builder.ins().$f(lhs, rhs).into()
         }};
     }
     macro_rules! cmp {
         ($cmp:path, $lhs:expr, $rhs:expr $(,)?) => {{
-            let lhs = gen_operand(builder, global, local, $lhs.as_ref())
-                .as_single()
-                .expect("Unary addition operator cannot be used on a tuple");
-            let rhs = gen_operand(builder, global, local, $rhs.as_ref())
-                .as_single()
-                .expect("Unary addition operator cannot be used on a tuple");
+            let lhs = gen_operand(builder, global, local, $lhs.as_ref()).expect_single();
+            let rhs = gen_operand(builder, global, local, $rhs.as_ref()).expect_single();
             builder.ins().icmp($cmp, lhs, rhs).into()
         }};
     }
@@ -242,19 +242,15 @@ fn gen_operand<'f, 'e>(
         Expr::And(_, _) => todo!(),
         Expr::Or(_, _) => todo!(),
         Expr::Block(body) => gen_block(builder, global, local, body),
-        Expr::IfElse(cond, if_body, else_body) => gen_if_else(
+        Expr::IfElse(cond, if_block, else_block) => gen_if_else(
             builder,
             global,
             local,
             cond,
-            if_body.as_block().unwrap(),
-            else_body
-                .as_ref()
-                .expect("Requires `else` block when using if-else block as value")
-                .as_block()
-                .unwrap(),
+            if_block.as_block().unwrap(),
+            else_block.as_deref().map(|expr| expr.as_block().unwrap()),
         ),
-        Expr::Loop(body) => gen_loop(builder, global, local, body.as_block().unwrap()).into(),
+        Expr::Loop(block) => gen_loop(builder, global, local, block.as_block().unwrap()).into(),
         Expr::Call(callee, args) => gen_call(builder, global, local, callee, args).into(),
         Expr::Tuple(fields) => fields
             .iter()
@@ -272,52 +268,91 @@ fn gen_operand<'f, 'e>(
 /// Generate an assignment statement
 fn gen_assign<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    local: &mut LocalContext<'e>,
     global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
     lhs: &'e Expr,
     rhs: &'e Expr,
 ) {
     match lhs {
-        Expr::Id(name) => gen_assign_var(builder, local, global, &name, rhs),
-        Expr::Tuple(fields) => gen_assign_tuple(builder, local, global, &fields, rhs),
+        Expr::Id(name) => gen_assign_var(builder, global, local, &name, rhs),
+        Expr::Tuple(fields) => gen_assign_tuple(builder, global, local, &fields, rhs),
         _ => panic!("Expression cannot be used as LHS of assignment"),
     }
 }
 
-/// Generate an assignment with one variable as lhs, called by `gen_assign`
+/// Generate an assignment statement with one variable as lhs, called by `gen_assign`
 #[inline(always)]
 fn gen_assign_var<'e>(
     builder: &mut FunctionBuilder<'_>,
-    local: &mut LocalContext<'e>,
     global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
     lhs: &'e str,
     rhs: &'e Expr,
 ) {
-    gen_operand(builder, global, local, rhs)
-        .values()
-        .for_each(|rhs| {
-            let var = declare_var(builder, local, lhs);
-            builder.def_var(var, rhs);
-        });
+    let lhs = local.expect_var(lhs);
+    let rhs = gen_operand(builder, global, local, rhs).expect_single();
+    builder.def_var(lhs, rhs);
 }
 
-/// Generate an assignment with a tuple as lhs, called by `gen_assign`
+/// Generate an assignment statement with a tuple as lhs, called by `gen_assign`
 #[allow(unused_variables)]
 #[inline(always)]
 fn gen_assign_tuple<'e>(
     builder: &mut FunctionBuilder<'_>,
-    local: &mut LocalContext<'e>,
     global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
+    lhs: &'e [Expr],
+    rhs: &'e Expr,
+) {
+    todo!()
+}
+
+/// Generate a `let` statement
+fn gen_let<'f, 'e>(
+    builder: &mut FunctionBuilder<'f>,
+    global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
+    lhs: &'e Expr,
+    rhs: &'e Expr,
+) {
+    match lhs {
+        Expr::Id(name) => gen_let_var(builder, global, local, &name, rhs),
+        Expr::Tuple(fields) => gen_let_tuple(builder, global, local, &fields, rhs),
+        _ => panic!("Expression cannot be used as LHS of assignment"),
+    }
+}
+
+/// Generate a `let` statement with one variable as lhs, called by `gen_let`
+#[inline(always)]
+fn gen_let_var<'e>(
+    builder: &mut FunctionBuilder<'_>,
+    global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
+    lhs: &'e str,
+    rhs: &'e Expr,
+) {
+    let rhs = gen_operand(builder, global, local, rhs).expect_single();
+    let var = declare_var(builder, local, lhs);
+    builder.def_var(var, rhs);
+}
+
+/// Generate a `let` statement with a tuple as lhs, called by `gen_let`
+#[allow(unused_variables)]
+#[inline(always)]
+fn gen_let_tuple<'e>(
+    builder: &mut FunctionBuilder<'_>,
+    global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
     lhs: &'e [Expr],
     rhs: &'e Expr,
 ) {
     match rhs {
         Expr::Tuple(rhs) => {
             lhs.iter().zip(rhs).for_each(|(lhs, rhs)| {
-                gen_assign_var(
+                gen_let_var(
                     builder,
-                    local,
                     global,
+                    local,
                     lhs.as_id().expect("Nested tuples are not allowed"),
                     rhs,
                 );
@@ -340,7 +375,7 @@ fn gen_loop<'e>(
     builder: &mut FunctionBuilder<'_>,
     global: &mut GlobalSymbols,
     local: &mut LocalContext<'e>,
-    body: &'e [Expr],
+    block: &'e AstBlock,
 ) -> Value {
     let loop_block = builder.create_block();
     let break_block = builder.create_block();
@@ -352,7 +387,7 @@ fn gen_loop<'e>(
     // loop block
     builder.switch_to_block(loop_block);
     let mut is_terminated = false;
-    for expr in body {
+    for expr in &block.body {
         if !gen_statement(builder, global, local, expr) {
             is_terminated = true;
             break;
@@ -383,47 +418,13 @@ fn gen_loop<'e>(
 }
 
 #[inline(always)]
-fn gen_if_else_no_tail<'e>(
-    builder: &mut FunctionBuilder<'_>,
-    global: &mut GlobalSymbols,
-    local: &mut LocalContext<'e>,
-    cond: &'e Expr,
-    if_body: &'e [Expr],
-    else_body: &'e [Expr],
-) {
-    let if_block = builder.create_block();
-    let else_block = builder.create_block();
-    let merged_block = builder.create_block();
-
-    // cmp
-    let cond_val = gen_operand(builder, global, local, cond).expect_single();
-    builder.ins().brif(cond_val, if_block, &[], else_block, &[]);
-
-    // if block
-    builder.switch_to_block(if_block);
-    builder.seal_block(if_block);
-    gen_block_no_tail(builder, global, local, if_body);
-    builder.ins().jump(merged_block, &[]);
-
-    // else block
-    builder.switch_to_block(else_block);
-    builder.seal_block(else_block);
-    gen_block_no_tail(builder, global, local, else_body);
-    builder.ins().jump(merged_block, &[]);
-
-    // merged block
-    builder.switch_to_block(merged_block);
-    builder.seal_block(merged_block);
-}
-
-#[inline(always)]
 fn gen_if_else<'e>(
     builder: &mut FunctionBuilder<'_>,
     global: &mut GlobalSymbols,
     local: &mut LocalContext<'e>,
     cond: &'e Expr,
-    if_body: &'e [Expr],
-    else_body: &'e [Expr],
+    if_ast_block: &'e AstBlock,
+    else_ast_block: Option<&'e AstBlock>,
 ) -> Value {
     let if_block = builder.create_block();
     let else_block = builder.create_block();
@@ -437,7 +438,7 @@ fn gen_if_else<'e>(
     let if_result = {
         builder.switch_to_block(if_block);
         builder.seal_block(if_block);
-        gen_block(builder, global, local, if_body)
+        gen_block(builder, global, local, if_ast_block)
     };
     builder.ins().jump(merged_block, if_result.as_slice());
 
@@ -445,7 +446,15 @@ fn gen_if_else<'e>(
     let else_result = {
         builder.switch_to_block(else_block);
         builder.seal_block(else_block);
-        gen_block(builder, global, local, else_body)
+        match else_ast_block {
+            Some(block) => gen_block(builder, global, local, block),
+            None => {
+                if !if_result.is_empty() {
+                    panic!("Type of the return value from `if` block doesn't match the value from `else` block, the if block returns {} but the else block returns nothing", if_result.display())
+                };
+                Value::Empty
+            }
+        }
     };
     builder.ins().jump(merged_block, else_result.as_slice());
 
@@ -525,27 +534,15 @@ fn gen_call<'f, 'e>(
     *builder.inst_results(inst).iter().next().unwrap()
 }
 
-/// Generate IR for a block, requiring it to not have a tail
-fn gen_block_no_tail<'e>(
-    builder: &mut FunctionBuilder<'_>,
-    global: &mut GlobalSymbols,
-    local: &mut LocalContext<'e>,
-    body: &'e [Expr],
-) {
-    body.iter()
-        .take_while(|expr| gen_statement(builder, global, local, expr))
-        .for_each(|_| ());
-}
-
 /// Generate IR for a block, if the block has a tail, return the value of the tail, otherwise
 /// return iconst 0
 fn gen_block<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
     local: &mut LocalContext<'e>,
-    body: &'e [Expr],
+    block: &'e AstBlock,
 ) -> Value {
-    match body {
+    match block.body.as_slice() {
         [] => Value::Empty,
         [expr] => match expr {
             Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
@@ -583,24 +580,26 @@ fn gen_statement<'f, 'e>(
     expr: &'e Expr,
 ) -> bool {
     match expr {
-        Expr::Assign(lhs, rhs) => gen_assign(builder, local, global, lhs, rhs),
+        Expr::Let(lhs, rhs) => gen_let(builder, global, local, lhs, rhs),
         Expr::Call(callee, args) => {
             gen_call(builder, global, local, callee, args);
         }
-        Expr::Block(body) => gen_block_no_tail(builder, global, local, &body),
-        Expr::IfElse(cond, if_body, else_body) => gen_if_else_no_tail(
-            builder,
-            global,
-            local,
-            cond,
-            if_body.as_block().unwrap(),
-            else_body
-                .as_ref()
-                .map(|e| e.as_block().unwrap())
-                .unwrap_or(&[]),
-        ),
+        Expr::Block(body) => {
+            gen_block(builder, global, local, &body).expect_empty();
+        }
+        Expr::IfElse(cond, if_body, else_body) => {
+            gen_if_else(
+                builder,
+                global,
+                local,
+                cond,
+                if_body.as_block().unwrap(),
+                else_body.as_ref().map(|e| e.as_block().unwrap()),
+            )
+            .expect_empty();
+        }
         Expr::Loop(body) => {
-            gen_loop(builder, global, local, body.as_block().unwrap());
+            gen_loop(builder, global, local, body.as_block().unwrap()).expect_empty();
         }
         Expr::Break(expr) => {
             let val = expr.as_ref().map_or(Value::Empty, |expr| {
@@ -622,6 +621,7 @@ fn gen_statement<'f, 'e>(
             builder.ins().jump(continue_block, &[]);
             return false;
         }
+        Expr::Assign(lhs, rhs) => gen_assign(builder, global, local, &lhs, &rhs),
         e => panic!("Expression not allowed as a statement: {e:?}"),
     }
     true

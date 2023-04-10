@@ -11,6 +11,7 @@ pub enum Token {
     Break,
     Continue,
     Fn,
+    Let,
 
     Eq,
     EqEq,
@@ -88,6 +89,14 @@ impl Token {
     #[must_use]
     pub fn is_brace_close(&self) -> bool {
         matches!(self, Self::BraceClose)
+    }
+
+    /// Returns `true` if the token is [`Eq`].
+    ///
+    /// [`Eq`]: Token::Eq
+    #[must_use]
+    pub fn is_eq(&self) -> bool {
+        matches!(self, Self::Eq)
     }
 }
 
@@ -194,6 +203,7 @@ fn take_id(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
         "break" => Token::Break,
         "continue" => Token::Continue,
         "fn" => Token::Fn,
+        "let" => Token::Let,
         _ => Token::Id(id),
     }
 }

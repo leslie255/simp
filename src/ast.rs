@@ -5,13 +5,18 @@ use crate::{
     ExpectTrue,
 };
 
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub body: Vec<Expr>,
+}
+
 #[derive(Debug, Clone)]
 #[repr(u8)]
 pub enum Expr {
     Id(String) = 1,
     Num(i64),
     Tuple(Vec<Expr>),
+    Let(Box<Expr>, Box<Expr>),
     Assign(Box<Expr>, Box<Expr>),
     Eq(Box<Expr>, Box<Expr>),
     NEq(Box<Expr>, Box<Expr>),
@@ -29,13 +34,14 @@ pub enum Expr {
     Mod(Box<Expr>, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
-    Block(Vec<Expr>),
+    Block(Block),
     Fn(String, Vec<String>, Option<Box<Expr>>),
     IfElse(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
     Loop(Box<Expr>),
     Break(Option<Box<Expr>>),
     Continue,
     Call(Box<Expr>, Vec<Expr>),
+    #[allow(dead_code)]
     StaticData(String),
     Tail(Box<Expr>),
 }
@@ -63,7 +69,7 @@ impl Expr {
 
     #[must_use]
     #[inline(always)]
-    pub fn as_block<'a>(&'a self) -> Option<&'a [Expr]> {
+    pub fn as_block(&self) -> Option<&Block> {
         if let Self::Block(v) = self {
             Some(v)
         } else {
@@ -91,7 +97,7 @@ fn parse_block(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
         body.push(expr);
     }
     tokens.next(); // the `}` token
-    Some(Expr::Block(body))
+    Some(Expr::Block(Block { body }))
 }
 
 /// Parse a function definition, starting from the iterator pointing at the `fn` token
@@ -124,6 +130,19 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
         _ => panic!("Expects `=` or `;`"),
     };
     Some(Expr::Fn(name, args, rhs.map(Box::new)))
+}
+
+/// Parse a let expression, starting from the iterator pointing at the `let` token
+#[inline(always)]
+#[must_use]
+fn parse_let(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    let lhs = parse_expr(13, tokens)?;
+    tokens
+        .next()?
+        .is_eq()
+        .expect_true("Expects `=` after LHS of a `let` expression");
+    let rhs = parse_expr(15, tokens)?;
+    Some(Expr::Let(Box::new(lhs), Box::new(rhs)))
 }
 
 /// Parse arguments to a function call, starting from the iterator pointing at the token before `(`
@@ -231,6 +250,7 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Break => parse_break(tokens)?,
         Token::Continue => Expr::Continue,
         Token::Fn => parse_fn(tokens)?,
+        Token::Let => parse_let(tokens)?,
         Token::ExcEq => panic!("Unexpected `!=`"),
         Token::Eq => panic!("Unexpected `=`"),
         Token::EqEq => panic!("Unexpected `==`"),
