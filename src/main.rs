@@ -18,10 +18,11 @@ mod token;
 fn main() {
     let ast = parse_stuff(
         r#"
-fn identity(x) = x;
 fn main() = {
-    a = loop {
-        break identity(255);
+    (a, b) = if 0 {
+        (255, 256)
+    } else {
+        (1, 0)
     };
     a
 };

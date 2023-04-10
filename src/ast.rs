@@ -11,6 +11,7 @@ use crate::{
 pub enum Expr {
     Id(String) = 1,
     Num(i64),
+    Tuple(Vec<Expr>),
     Assign(Box<Expr>, Box<Expr>),
     Eq(Box<Expr>, Box<Expr>),
     NEq(Box<Expr>, Box<Expr>),
@@ -106,7 +107,7 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
         .is_paren_open()
         .expect_true("Expects `(` after function name at function definition");
     let mut args = Vec::<String>::new();
-    while tokens.peek().map_or(false, |t| !t.is_paren_close()) {
+    while !tokens.peek()?.is_paren_close() {
         args.push(tokens.next()?.into_id().expect("Expects argument name"));
         match tokens.peek()? {
             Token::Comma => {
@@ -131,7 +132,7 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
 fn parse_call_args(tokens: &mut Peekable<TokenStream>) -> Option<Vec<Expr>> {
     tokens.next();
     let mut args = Vec::<Expr>::new();
-    while tokens.peek().map_or(false, |t| !t.is_paren_close()) {
+    while !tokens.peek()?.is_paren_close() {
         args.push(parse_expr(15, tokens)?);
         match tokens.peek()? {
             Token::Comma => {
@@ -176,6 +177,32 @@ fn parse_loop(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     Some(Expr::Loop(Box::new(body)))
 }
 
+#[inline(always)]
+#[must_use]
+fn parse_paren(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    let expr = parse_expr(15, tokens)?;
+    match tokens.next()? {
+        Token::Comma => {
+            // is a tuple
+            let mut fields = vec![expr];
+            while !tokens.peek()?.is_paren_close() {
+                fields.push(parse_expr(15, tokens)?);
+                match tokens.peek()? {
+                    Token::Comma => {
+                        tokens.next();
+                    }
+                    Token::ParenClose => (),
+                    _ => panic!("Expects `)` or `,`"),
+                }
+            }
+            tokens.next();
+            Some(Expr::Tuple(fields))
+        }
+        Token::ParenOpen => Some(expr),
+        _ => panic!("Expects `)` or `,`"),
+    }
+}
+
 #[must_use]
 fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
@@ -211,14 +238,10 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Comma => panic!("Unexpected `,`"),
         Token::Dot => panic!("Unexpected `.`"),
         Token::Semicolon => parse_expr(15, tokens)?,
-        Token::ParenOpen => {
-            let expr = parse_expr(15, tokens)?;
-            tokens.next()?.is_paren_close().expect_true("Expect `)`");
-            expr
-        }
+        Token::ParenOpen => parse_paren(tokens)?,
         Token::ParenClose => panic!("Unexpected `)`"),
         Token::SquareOpen => unimplemented!(),
-        Token::SquareClose => unimplemented!(),
+        Token::SquareClose => panic!("Unexpected `]`"),
         Token::BraceOpen => parse_block(tokens)?,
         Token::BraceClose => panic!("Unexpected `}}`"),
     };
