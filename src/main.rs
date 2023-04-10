@@ -20,11 +20,8 @@ fn main() {
         r#"
 fn main() = {
     let x = 255;
-    if 1 {
-        x = 256;
-    } else {
-        x = 0;
-    }
+    let y = 256;
+    (x, y) = (y, x);
     x
 };
 "#,

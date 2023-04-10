@@ -304,7 +304,40 @@ fn gen_assign_tuple<'e>(
     lhs: &'e [Expr],
     rhs: &'e Expr,
 ) {
-    todo!()
+    match rhs {
+        Expr::Tuple(rhs) => {
+            lhs.iter().zip(rhs).for_each(|(lhs, rhs)| {
+                gen_assign_var(
+                    builder,
+                    global,
+                    local,
+                    lhs.as_id().expect("Nested tuples are not allowed"),
+                    rhs,
+                );
+            });
+        }
+        expr => {
+            let rhs = gen_operand(builder, global, local, expr);
+            lhs.iter()
+                .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as lhs of an assignment"))
+                .zip(rhs.values())
+                .for_each(|(id, rhs)| {
+                    let var = local.expect_var("id");
+                    builder.def_var(var, rhs);
+                });
+            if lhs.len() != rhs.len() {
+                panic!(
+                    "The LHS is {} but the rhs is {}",
+                    match lhs.len() {
+                        0 => "nothing".to_string(),
+                        1 => "one variable".to_string(),
+                        x => format!("a tuple of {x} variables"),
+                    },
+                    rhs.display()
+                );
+            }
+        }
+    }
 }
 
 /// Generate a `let` statement
@@ -367,6 +400,17 @@ fn gen_let_tuple<'e>(
                     let var = declare_var(builder, local, id);
                     builder.def_var(var, rhs);
                 });
+            if lhs.len() != rhs.len() {
+                panic!(
+                    "The LHS is {} but the rhs is {}",
+                    match lhs.len() {
+                        0 => "nothing".to_string(),
+                        1 => "one variable".to_string(),
+                        x => format!("a tuple of {x} variables"),
+                    },
+                    rhs.display()
+                );
+            }
         }
     }
 }
