@@ -345,6 +345,8 @@ fn gen_loop<'e>(
     let loop_block = builder.create_block();
     let break_block = builder.create_block();
 
+    builder.ins().jump(loop_block, &[]);
+
     local.enters_loop(break_block, loop_block);
 
     // loop block
