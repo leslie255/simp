@@ -2,7 +2,7 @@
 
 use std::{fs, sync::Arc};
 
-use ast::Expr;
+use ast::AstParser;
 use cranelift_codegen::settings;
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -16,7 +16,7 @@ mod symbols;
 mod token;
 
 fn main() {
-    let ast = parse_stuff(
+    let ast = make_parser(
         r#"
 fn identity(x) = x;
 fn main() = {
@@ -62,9 +62,9 @@ fn write_bytes_to_file(path: &str, buf: &[u8]) -> std::io::Result<()> {
     std::io::prelude::Write::write_all(&mut file, buf)
 }
 
-fn parse_stuff(s: &'static str) -> Vec<Expr> {
+fn make_parser(s: &'static str) -> AstParser {
     let tokens = TokenStream::from_str(s).peekable();
-    ast::parse(tokens)
+    AstParser::new(tokens)
 }
 
 pub(self) trait ExpectTrue {

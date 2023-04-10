@@ -278,14 +278,23 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
     Some(expr)
 }
 
-#[must_use]
-pub fn parse(mut tokens: Peekable<TokenStream>) -> Vec<Expr> {
-    let mut ast = Vec::<Expr>::new();
-    while let Some(expr) = parse_expr(15, &mut tokens) {
-        ast.push(expr);
-        if let Some(Token::Semicolon) = tokens.peek() {
-            tokens.next();
+#[derive(Clone, Debug)]
+pub struct AstParser {
+    tokens: Peekable<TokenStream>,
+}
+
+impl AstParser {
+    pub fn new(tokens: Peekable<TokenStream>) -> Self { Self { tokens } }
+}
+
+impl Iterator for AstParser {
+    type Item = Expr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let expr = parse_expr(15, &mut self.tokens);
+        if let Some(Token::Semicolon) = self.tokens.peek() {
+            self.tokens.next();
         }
+        expr
     }
-    ast
 }
