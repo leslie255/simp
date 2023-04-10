@@ -8,6 +8,8 @@ pub enum Token {
     If,
     Else,
     Loop,
+    Break,
+    Continue,
     Fn,
 
     Eq,
@@ -189,6 +191,8 @@ fn take_id(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
         "if" => Token::If,
         "else" => Token::Else,
         "loop" => Token::Loop,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
         "fn" => Token::Fn,
         _ => Token::Id(id),
     }

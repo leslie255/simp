@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cranelift::prelude::{
     types::I64, AbiParam, ExtFuncData, ExternalName, InstBuilder, Signature, Value,
 };
@@ -15,14 +13,14 @@ use cranelift_object::ObjectModule;
 
 use crate::{
     ast::Expr,
-    symbols::{GlobalSymbols, LocalSymbols},
+    symbols::{GlobalSymbols, LocalContext},
 };
 
 /// Declares a new variable in the local symbol space and in the function builder
 #[inline(always)]
 fn declare_var<'e>(
     builder: &mut FunctionBuilder<'_>,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     name: &'e str,
 ) -> Variable {
     let var = local.create_var(name);
@@ -35,7 +33,7 @@ fn declare_var<'e>(
 fn gen_operand<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     expr: &'e Expr,
 ) -> Value {
     macro_rules! bin_op {
@@ -87,6 +85,7 @@ fn gen_operand<'f, 'e>(
                 .as_block()
                 .unwrap(),
         ),
+        Expr::Loop(body) => gen_loop(builder, global, local, body.as_block().unwrap()),
         Expr::Call(callee, args) => gen_call(builder, global, local, callee, args),
         e => panic!("Expression {e:?} not allowed as rhs of assignment"),
     }
@@ -94,7 +93,7 @@ fn gen_operand<'f, 'e>(
 
 fn gen_assign<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     global: &mut GlobalSymbols,
     lhs: &'e Expr,
     rhs: &'e Expr,
@@ -107,12 +106,46 @@ fn gen_assign<'f, 'e>(
     builder.def_var(local.expect_var(name), rhs)
 }
 
-#[allow(unused_variables)]
+fn gen_loop<'e>(
+    builder: &mut FunctionBuilder<'_>,
+    global: &mut GlobalSymbols,
+    local: &mut LocalContext<'e>,
+    body: &'e [Expr],
+) -> Value {
+    let loop_block = builder.create_block();
+    let break_block = builder.create_block();
+    let break_val = builder.append_block_param(break_block, I64);
+
+    local.enters_loop(break_block, loop_block);
+
+    // loop block
+    builder.switch_to_block(loop_block);
+    let mut is_terminated = false;
+    for expr in body {
+        if !gen_statement(builder, global, local, expr) {
+            is_terminated = true;
+            break;
+        }
+    }
+    if !is_terminated {
+        builder.ins().jump(loop_block, &[]);
+    }
+    builder.seal_block(loop_block);
+
+    // break block
+    builder.switch_to_block(break_block);
+    builder.seal_block(break_block);
+
+    local.leaves_loop();
+
+    break_val
+}
+
 #[inline(always)]
 fn gen_if_else<'e>(
     builder: &mut FunctionBuilder<'_>,
     global: &mut GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     cond: &'e Expr,
     if_body: &'e [Expr],
     else_body: &'e [Expr],
@@ -153,7 +186,7 @@ fn gen_if_else<'e>(
 fn import_func_if_needed<'a, 'e>(
     builder: &mut FunctionBuilder<'_>,
     global: &'a GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     name: &'e str,
 ) -> (&'a Signature, FuncRef) {
     let (index, sig) = global.func(name).expect(
@@ -180,7 +213,7 @@ fn import_func_if_needed<'a, 'e>(
 fn gen_call<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     callee: &'e Expr,
     args: &'e Vec<Expr>,
 ) -> Value {
@@ -203,20 +236,12 @@ fn gen_call<'f, 'e>(
     *builder.inst_results(inst).iter().next().unwrap()
 }
 
-fn gen_tail<'f, 'e>(
-    builder: &mut FunctionBuilder<'f>,
-    global: &mut GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
-    expr: &'e Expr,
-) {
-    let val = gen_operand(builder, global, local, expr);
-    builder.ins().return_(&[val]);
-}
-
+/// Generate IR for a block, if the block has a tail, return the value of the tail, otherwise
+/// return iconst 0
 fn gen_block<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     body: &'e [Expr],
 ) -> Value {
     match body {
@@ -232,9 +257,8 @@ fn gen_block<'f, 'e>(
             local.enters_block();
             unsafe { body.get_unchecked(0..body.len() - 1) }
                 .iter()
-                .for_each(|expr| {
-                    gen_statement(builder, global, local, expr);
-                });
+                .take_while(|expr| gen_statement(builder, global, local, expr))
+                .for_each(|_| ());
             let last = unsafe { body.get_unchecked(body.len() - 1) };
             let val = match last {
                 Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
@@ -249,12 +273,14 @@ fn gen_block<'f, 'e>(
     }
 }
 
+/// Generate IR for a statement
+/// Returns `false` if encountering a terminating statement (e.g. break, continue)
 fn gen_statement<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
-    local: &mut LocalSymbols<'e>,
+    local: &mut LocalContext<'e>,
     expr: &'e Expr,
-) {
+) -> bool {
     match expr {
         Expr::Assign(lhs, rhs) => gen_assign(builder, local, global, lhs, rhs),
         Expr::Call(callee, args) => {
@@ -274,9 +300,29 @@ fn gen_statement<'f, 'e>(
                     .unwrap_or(&[]),
             );
         }
-        Expr::While(_, _) => todo!(),
+        Expr::Loop(body) => {
+            gen_loop(builder, global, local, body.as_block().unwrap());
+        }
+        Expr::Break(expr) => {
+            let val = gen_operand(builder, global, local, &expr);
+            let break_block = local
+                .parent_loop()
+                .expect("Using `break` outside of a loop")
+                .break_block;
+            builder.ins().jump(break_block, &[val]);
+            return false;
+        }
+        Expr::Continue => {
+            let continue_block = local
+                .parent_loop()
+                .expect("Using `break` outside of a loop")
+                .continue_block;
+            builder.ins().jump(continue_block, &[]);
+            return false;
+        }
         _ => panic!("Expression not allowed as a statement"),
     }
+    true
 }
 
 #[inline(always)]
@@ -316,7 +362,7 @@ pub fn compile_func(
     };
     let mut func = Function::with_name_signature(UserFuncName::user(0, func_index), sig);
     let mut builder = FunctionBuilder::new(&mut func, builder_ctx);
-    let mut local = LocalSymbols::default();
+    let mut local = LocalContext::default();
     let entry_block = {
         let b = builder.create_block();
         builder.append_block_params_for_function_params(b);

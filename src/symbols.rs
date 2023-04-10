@@ -1,28 +1,37 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use cranelift::prelude::{EntityRef, Signature};
+use cranelift::prelude::{Block, EntityRef, Signature};
 use cranelift_codegen::ir::FuncRef;
 use cranelift_frontend::Variable;
 
+/// Information about the parent loop block, stored inside `LocalContext` as a stack
+#[derive(Clone, Copy, Debug)]
+pub struct LoopInfo {
+    pub break_block: Block,
+    pub continue_block: Block,
+}
+
 /// Keep track of symbols inside a function, includeing variables and imported functions
 #[derive(Clone, Debug)]
-pub struct LocalSymbols<'e> {
+pub struct LocalContext<'e> {
     imported_funcs: HashMap<&'e str, FuncRef>,
     vars: Vec<HashMap<&'e str, Variable>>,
     next_var_id: usize,
+    loops: Vec<LoopInfo>,
 }
 
-impl<'e> Default for LocalSymbols<'e> {
+impl<'e> Default for LocalContext<'e> {
     fn default() -> Self {
         Self {
             imported_funcs: HashMap::default(),
             vars: vec![HashMap::default()],
             next_var_id: 0,
+            loops: Vec::default(),
         }
     }
 }
 
-impl<'e> LocalSymbols<'e> {
+impl<'e> LocalContext<'e> {
     fn var_stack_top_mut(&mut self) -> &mut HashMap<&'e str, Variable> {
         self.vars.last_mut().expect("Local symbol stack is empty")
     }
@@ -46,6 +55,24 @@ impl<'e> LocalSymbols<'e> {
 
     pub fn leaves_block(&mut self) {
         self.vars.pop();
+    }
+
+    pub fn enters_loop(&mut self, break_block: Block, continue_block: Block) {
+        self.loops.push(LoopInfo {
+            break_block,
+            continue_block,
+        });
+        self.enters_block();
+    }
+
+    pub fn leaves_loop(&mut self) {
+        self.loops.pop();
+        self.leaves_block();
+    }
+
+    /// Get the parent loop
+    pub fn parent_loop(&mut self) -> Option<LoopInfo> {
+        self.loops.last().copied()
     }
 
     /// Creates a new variable and add that to the symbols

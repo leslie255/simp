@@ -31,10 +31,12 @@ pub enum Expr {
     Block(Vec<Expr>),
     Fn(String, Vec<String>, Option<Box<Expr>>),
     IfElse(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
-    While(Box<Expr>, Vec<Expr>),
+    Loop(Box<Expr>),
+    Break(Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     StaticData(String),
     Tail(Box<Expr>),
+    Continue,
 }
 
 impl Expr {
@@ -165,6 +167,15 @@ fn parse_if(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     ))
 }
 
+/// Parse a loop block, starting from the iterator pointing at the token `if`
+#[inline(always)]
+#[must_use]
+fn parse_loop(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    tokens.next()?.is_brace_open().expect_true("Expect `{`");
+    let body = parse_block(tokens)?;
+    Some(Expr::Loop(Box::new(body)))
+}
+
 #[must_use]
 fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
@@ -181,7 +192,9 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Sub => parse_unary_rtl!(2, Expr::UnarySub),
         Token::If => parse_if(tokens)?,
         Token::Else => panic!("Unexpected `else`"),
-        Token::Loop => todo!(),
+        Token::Loop => parse_loop(tokens)?,
+        Token::Break => Expr::Break(Box::new(parse_expr(15, tokens)?)),
+        Token::Continue => Expr::Continue,
         Token::Fn => parse_fn(tokens)?,
         Token::ExcEq => panic!("Unexpected `!=`"),
         Token::Eq => panic!("Unexpected `=`"),
