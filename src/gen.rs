@@ -24,6 +24,7 @@ enum Value {
     Empty,
     Single([ClifValue; 1]),
     Tuple(Vec<ClifValue>),
+    Never,
 }
 
 impl Value {
@@ -78,6 +79,7 @@ impl Value {
             Self::Empty => &[],
             Self::Single(val) => val.as_slice(),
             Self::Tuple(fields) => &fields,
+            Self::Never => &[],
         }
     }
 
@@ -86,6 +88,7 @@ impl Value {
             Self::Empty => Values::Empty,
             &Self::Single(val) => Values::Singular(val[0]),
             Self::Tuple(vals) => Values::Tuple(vals.iter()),
+            Self::Never => Values::Empty,
         }
     }
 
@@ -98,11 +101,34 @@ impl Value {
         matches!(self, Self::Single(..))
     }
 
-    fn len(&self) -> usize {
-        match self {
-            Self::Empty => 0,
-            Self::Single(..) => 1,
-            Self::Tuple(vals) => vals.len(),
+    /// Returns whether or not it's valid for `other` to be assigned to `self`.
+    /// - `Never` can be coerced to any types
+    /// - `Tuple`s of 1 value can be coerced to `Single`
+    /// - `Tuple`s with 0 values can be coerced to `Empty`
+    fn matches_val_type(&self, other: &Self) -> bool {
+        match (self, other) {
+            (_, Self::Never)
+            | (Self::Never, _)
+            | (Self::Empty, Self::Empty)
+            | (Self::Single(..), Self::Single(..)) => true,
+            (Self::Empty, Self::Tuple(vals)) if vals.is_empty() => true,
+            (Self::Tuple(vals), Self::Empty) if vals.is_empty() => true,
+            (Self::Single(..), Self::Tuple(vals)) if vals.len() == 1 => true,
+            (Self::Tuple(vals), Self::Single(..)) if vals.len() == 1 => true,
+            (Self::Tuple(l), Self::Tuple(r)) if l.len() == r.len() => true,
+            _ => false,
+        }
+    }
+
+    /// Checks whether or not it's valid for value of type `self` to be assigned to expression of
+    /// length `len`.
+    fn can_be_assigned_to_expr_of_len(&self, len: usize) -> bool {
+        match (self, len) {
+            (Value::Empty, 0) => true,
+            (Value::Single(..), 1) => true,
+            (Value::Tuple(vals), len) => vals.len() == len,
+            (Value::Never, _) => false, // never can never be assigned
+            _ => false,
         }
     }
 
@@ -117,6 +143,55 @@ impl Value {
             Self::Empty => ValueDisplay::Empty,
             Self::Single(..) => ValueDisplay::Single,
             Self::Tuple(vals) => ValueDisplay::Tuple(vals.len()),
+            Self::Never => ValueDisplay::Empty,
+        }
+    }
+
+    /// Returns `true` if the value is [`Never`].
+    ///
+    /// [`Never`]: Value::Never
+    #[must_use]
+    fn is_never(&self) -> bool {
+        matches!(self, Self::Never)
+    }
+
+    #[must_use]
+    fn ty(&self) -> ValueType {
+        match self {
+            Value::Empty => ValueType::Empty,
+            Value::Single(_) => ValueType::Single,
+            Value::Tuple(vals) => ValueType::Tuple(vals.len()),
+            Value::Never => ValueType::Never,
+        }
+    }
+}
+
+/// A hollow value with only the type
+#[derive(Debug, Clone, Copy)]
+pub enum ValueType {
+    Empty,
+    Single,
+    Tuple(usize),
+    Never,
+}
+
+impl ValueType {
+    /// Returns whether or not it's valid for `other` to be assigned to `self`.
+    /// - `Never` can be coerced to any types
+    /// - `Tuple`s of 1 value can be coerced to `Single`
+    /// - `Tuple`s with 0 values can be coerced to `Empty`
+    pub fn matches(self, other: Self) -> bool {
+        match (self, other) {
+            (_, Self::Never)
+            | (Self::Never, _)
+            | (Self::Empty, Self::Empty)
+            | (Self::Single, Self::Single) => true,
+            (Self::Empty, Self::Tuple(0)) => true,
+            (Self::Tuple(0), Self::Empty) => true,
+            (Self::Single, Self::Tuple(1)) => true,
+            (Self::Tuple(1), Self::Single) => true,
+            (Self::Tuple(l), Self::Tuple(r)) if l == r => true,
+            _ => false,
         }
     }
 }
@@ -325,7 +400,7 @@ fn gen_assign_tuple<'e>(
                     let var = local.expect_var("id");
                     builder.def_var(var, rhs);
                 });
-            if lhs.len() != rhs.len() {
+            if !rhs.can_be_assigned_to_expr_of_len(lhs.len()) {
                 panic!(
                     "The LHS is {} but the RHS is {}",
                     match lhs.len() {
@@ -400,7 +475,7 @@ fn gen_let_tuple<'e>(
                     let var = declare_var(builder, local, id);
                     builder.def_var(var, rhs);
                 });
-            if lhs.len() != rhs.len() {
+            if !rhs.can_be_assigned_to_expr_of_len(lhs.len()) {
                 panic!(
                     "The LHS is {} but the rhs is {}",
                     match lhs.len() {
@@ -446,14 +521,15 @@ fn gen_loop<'e>(
     builder.switch_to_block(break_block);
     builder.seal_block(break_block);
     let loop_info = unsafe { local.parent_loop().unwrap_unchecked() };
-    let break_val = match loop_info.val_count {
-        0 => Value::Empty,
-        1 => builder.append_block_param(break_block, I64).into(),
-        x => (0..x)
+    let break_val = match loop_info.val_ty {
+        None | Some(ValueType::Empty) => Value::Empty,
+        Some(ValueType::Single) => builder.append_block_param(break_block, I64).into(),
+        Some(ValueType::Tuple(len)) => (0..len)
             .into_iter()
             .map(|_| builder.append_block_param(break_block, I64))
             .collect::<Vec<ClifValue>>()
             .into(),
+        Some(ValueType::Never) => Value::Never,
     };
 
     local.leaves_loop();
@@ -484,7 +560,9 @@ fn gen_if_else<'e>(
         builder.seal_block(if_block);
         gen_block(builder, global, local, if_ast_block)
     };
-    builder.ins().jump(merged_block, if_result.as_slice());
+    if !if_result.is_never() {
+        builder.ins().jump(merged_block, if_result.as_slice());
+    }
 
     // else block
     let else_result = {
@@ -493,18 +571,21 @@ fn gen_if_else<'e>(
         match else_ast_block {
             Some(block) => gen_block(builder, global, local, block),
             None => {
-                if !if_result.is_empty() {
-                    panic!("Type of the return value from `if` block doesn't match the value from `else` block, the if block returns {} but the else block returns nothing", if_result.display())
-                };
+                match if_result {
+                    Value::Empty | Value::Never=> (),
+                    _ => panic!("Type of the return value from `if` block doesn't match the value from `else` block, the if block returns {} but the else block returns nothing", if_result.display()),
+                }
                 Value::Empty
             }
         }
     };
-    builder.ins().jump(merged_block, else_result.as_slice());
+    if !else_result.is_never() {
+        builder.ins().jump(merged_block, if_result.as_slice());
+    }
 
     // merged block
     // check number of results
-    if if_result.len() != else_result.len() {
+    if !if_result.matches_val_type(&else_result) {
         panic!(
             "Expects same type of value from `if` block and `else` block, but found the if block returns {} and the else block returns {}",
             if_result.display(),
@@ -512,13 +593,20 @@ fn gen_if_else<'e>(
     }
     builder.switch_to_block(merged_block);
     builder.seal_block(merged_block);
-    match if_result {
+    let result = match (if_result, else_result) {
+        (Value::Never, Value::Never) => return Value::Never,
+        (x, Value::Never) => x,
+        (Value::Never, x) => x,
+        (x, _) => x,
+    };
+    match result {
         Value::Empty => Value::Empty,
         Value::Single(_) => builder.append_block_param(merged_block, I64).into(),
         Value::Tuple(vals) => (0..vals.len())
             .map(|_| builder.append_block_param(merged_block, I64))
             .collect::<Vec<ClifValue>>()
             .into(),
+        Value::Never => Value::Never,
     }
 }
 
@@ -589,24 +677,29 @@ fn gen_block<'f, 'e>(
         [] => Value::Empty,
         [expr] => match expr {
             Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
-            expr => {
-                gen_statement(builder, global, local, &expr);
-                Value::Empty
-            }
+            expr => match gen_statement(builder, global, local, &expr) {
+                true => Value::Empty,
+                false => Value::Never,
+            },
         },
         body => {
             local.enters_block();
-            unsafe { body.get_unchecked(0..body.len() - 1) }
-                .iter()
-                .take_while(|expr| gen_statement(builder, global, local, expr))
-                .for_each(|_| ());
+            // first generate for expressions except the last one ...
+            for expr in unsafe { body.get_unchecked(0..body.len() - 1) }.iter() {
+                match gen_statement(builder, global, local, &expr) {
+                    true => continue,
+                    false => return Value::Never,
+                }
+            }
+            // ... and then if the last one is a tail, return the value of the tail, otherwise
+            // return `Empty`.
             let last = unsafe { body.get_unchecked(body.len() - 1) };
             let val = match last {
                 Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
-                expr => {
-                    gen_statement(builder, global, local, &expr);
-                    Value::Empty
-                }
+                expr => match gen_statement(builder, global, local, &expr) {
+                    true => Value::Empty,
+                    false => Value::Never,
+                },
             };
             local.leaves_block();
             val
@@ -614,8 +707,8 @@ fn gen_block<'f, 'e>(
     }
 }
 
-/// Generate IR for a statement
-/// Returns `false` if encountering a terminating statement (e.g. break, continue)
+/// Generate IR for a statement.
+/// Returns `false` if encountering a `Never` statement (`break` and `continue`).
 fn gen_statement<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
@@ -651,7 +744,7 @@ fn gen_statement<'f, 'e>(
             let parent_loop = local
                 .parent_loop_mut()
                 .expect("Using `break` outside of a loop");
-            parent_loop.check_break_val(val.len());
+            parent_loop.check_break_val(val.ty());
             let break_block = parent_loop.break_block;
             builder.ins().jump(break_block, val.as_slice());
             return false;

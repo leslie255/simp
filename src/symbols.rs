@@ -4,13 +4,16 @@ use cranelift::prelude::{Block, EntityRef, Signature};
 use cranelift_codegen::ir::FuncRef;
 use cranelift_frontend::Variable;
 
+use crate::gen::ValueType;
+
 /// Information about the parent loop block, stored inside `LocalContext` as a stack
 #[derive(Clone, Copy, Debug)]
 pub struct LoopInfo {
     pub break_block: Block,
     pub continue_block: Block,
-    /// Number of values the block returns
-    pub val_count: usize,
+    /// Type of value the block returns, used for checking if all the `break` statements in this
+    /// loop carrys the same type of value.
+    pub val_ty: Option<ValueType>,
 }
 
 impl LoopInfo {
@@ -18,18 +21,16 @@ impl LoopInfo {
         Self {
             break_block,
             continue_block,
-            val_count: usize::MAX,
+            val_ty: None,
         }
     }
 
     /// If there was a `break` statement previously encountered, check if `new_count` matches the
     /// old `val_count`, otherwise, set the `val_count` to `new_count`.
-    pub fn check_break_val(&mut self, new_count: usize) -> bool {
-        if self.val_count == usize::MAX {
-            self.val_count = new_count;
-            true
-        } else {
-            self.val_count == new_count
+    pub fn check_break_val(&mut self, new_ty: ValueType) -> bool {
+        match self.val_ty {
+            Some(prev) => prev.matches(new_ty),
+            None => false,
         }
     }
 }
