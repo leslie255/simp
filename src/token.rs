@@ -129,32 +129,69 @@ impl TokenStream {
     /// The function assumes:
     /// - The first char returned from `self.chars.next()` is not whitespace
     /// - Does not immediately encounter EOF
+    ///
+    /// # Returns
+    /// `Some(token)` if a token is successfully retrieved
+    /// `None` if a comment is encountered
     #[inline(always)]
     #[must_use]
     pub unsafe fn take_token(&mut self) -> Option<Token> {
         Some(match self.chars.next().unwrap_unchecked() {
             c if c.is_ascii_digit() => take_num(c, &mut self.chars),
             c if is_alphanumeric_or_underscore(c) => take_id(c, &mut self.chars),
-            '=' => match self.chars.next_if(|&c| c == '=') {
+            '=' => match self.chars.next_if_eq(&'=') {
                 Some(..) => Token::EqEq,
                 None => Token::Eq,
             },
-            '!' => match self.chars.next_if(|&c| c == '=') {
+            '!' => match self.chars.next_if_eq(&'=') {
                 Some(..) => Token::ExcEq,
                 None => Token::Exc,
             },
-            '<' => match self.chars.next_if(|&c| c == '=') {
+            '<' => match self.chars.next_if_eq(&'=') {
                 Some(..) => Token::LeEq,
                 None => Token::Le,
             },
-            '>' => match self.chars.next_if(|&c| c == '=') {
+            '>' => match self.chars.next_if_eq(&'=') {
                 Some(..) => Token::GrEq,
                 None => Token::Gr,
             },
             '+' => Token::Add,
             '-' => Token::Sub,
             '*' => Token::Mul,
-            '/' => Token::Div,
+            '/' => match self.chars.peek() {
+                Some('/') => {
+                    self.chars.next();
+                    while self.chars.next_if(|&c| c != '\n').is_some() {}
+                    self.chars.next();
+                    return None;
+                }
+                Some('*') => {
+                    self.chars.next();
+                    let mut depth = 1u32;
+                    while depth != 0 {
+                        match self.chars.next()? {
+                            '*' => match self.chars.peek()? {
+                                '/' => {
+                                    self.chars.next();
+                                    depth -= 1;
+                                }
+                                _ => (),
+                            },
+                            '/' => match self.chars.peek()? {
+                                '*' => {
+                                    self.chars.next();
+                                    depth += 1;
+                                }
+                                _ => (),
+                            },
+                            _ => (),
+                        }
+                    }
+                    self.chars.next();
+                    return None;
+                }
+                _ => Token::Div,
+            },
             '%' => Token::Mod,
             '&' => Token::And,
             '|' => Token::Or,
@@ -176,10 +213,15 @@ impl Iterator for TokenStream {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.chars.peek()?.is_whitespace() {
-            self.chars.next();
+        loop {
+            while self.chars.peek()?.is_whitespace() {
+                self.chars.next();
+            }
+            match unsafe { self.take_token() } {
+                Some(t) => break Some(t),
+                None => continue,
+            }
         }
-        unsafe { self.take_token() }
     }
 }
 

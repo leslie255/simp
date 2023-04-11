@@ -216,7 +216,7 @@ fn gen_operand<'f, 'e>(
         }};
     }
     match expr {
-        Expr::Id(id) => builder.use_var(local.expect_var(id.as_str())).into(),
+        Expr::Id(id) => builder.use_var(local.expect_var(&id)).into(),
         &Expr::Num(num) => builder.ins().iconst(I64, num).into(),
         Expr::Eq(lhs, rhs) => cmp!(IntCC::Equal, lhs, rhs),
         Expr::NEq(lhs, rhs) => cmp!(IntCC::NotEqual, lhs, rhs),
@@ -307,19 +307,19 @@ fn gen_assign_tuple<'e>(
     match rhs {
         Expr::Tuple(rhs) => {
             lhs.iter().zip(rhs).for_each(|(lhs, rhs)| {
-                gen_assign_var(
-                    builder,
-                    global,
-                    local,
-                    lhs.as_id().expect("Nested tuples are not allowed"),
-                    rhs,
-                );
+                let lhs = local.expect_var(lhs.as_id().expect(
+                    "Only identifier or tuple of identifiers is allowed as LHS of an assignment",
+                ));
+                let rhs = gen_operand(builder, global, local, rhs)
+                    .as_single()
+                    .expect("Nested tuples are not allowed, flatten it first before assigning");
+                builder.def_var(lhs, rhs);
             });
         }
         expr => {
             let rhs = gen_operand(builder, global, local, expr);
             lhs.iter()
-                .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as lhs of an assignment"))
+                .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as LHS of an assignment"))
                 .zip(rhs.values())
                 .for_each(|(id, rhs)| {
                     let var = local.expect_var("id");
@@ -327,7 +327,7 @@ fn gen_assign_tuple<'e>(
                 });
             if lhs.len() != rhs.len() {
                 panic!(
-                    "The LHS is {} but the rhs is {}",
+                    "The LHS is {} but the RHS is {}",
                     match lhs.len() {
                         0 => "nothing".to_string(),
                         1 => "one variable".to_string(),
@@ -531,10 +531,9 @@ fn import_func_if_needed<'a, 'e>(
     local: &mut LocalContext<'e>,
     name: &'e str,
 ) -> (&'a Signature, FuncRef) {
-    let (index, sig) = global.func(name).expect(
-        format!("Trying to call the function `{name}` which does not exist, symbols: {global:?}")
-            .as_str(),
-    );
+    let (index, sig) = global.func(name).expect(&format!(
+        "Trying to call the function `{name}` which does not exist, symbols: {global:?}"
+    ));
     let func_ref = local.import_func_if_needed(name, || {
         let sig_ref = builder.import_signature(sig.clone());
         let name_ref = builder

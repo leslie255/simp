@@ -18,9 +18,12 @@ mod token;
 fn main() {
     let ast = make_parser(
         r#"
+        // lol
+        /* nested /* comments */ test */
 fn main() = {
-    let x = 255;
-    let y = 256;
+    /**/
+    let x = 256;
+    let y = 255;
     (x, y) = (y, x);
     x
 };
@@ -38,6 +41,7 @@ fn main() = {
     let mut symbols = GlobalSymbols::default();
     let mut fn_builder_ctx = FunctionBuilderContext::new();
     ast.into_iter().for_each(|e| {
+        dbg!(&e);
         let f = e.into_fn().unwrap();
         gen::compile_func(&mut obj_module, &mut symbols, &mut fn_builder_ctx, f).unwrap();
     });
