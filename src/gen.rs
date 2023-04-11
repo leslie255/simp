@@ -311,16 +311,23 @@ fn gen_if_else<'e>(
 ) -> Value {
     let if_block = builder.create_block();
     let else_block = builder.create_block();
+    let merged_block = builder.create_block();
 
     // cmp
-    let cond_val = gen_operand(builder, global, local, cond)?.expect_single();
+    let cond_val = gen_operand(builder, global, local, cond).expect_single();
     builder.ins().brif(cond_val, if_block, &[], else_block, &[]);
 
+    // if block
     let if_result = {
         builder.switch_to_block(if_block);
         builder.seal_block(if_block);
         gen_block(builder, global, local, if_ast_block)
     };
+    if !if_result.is_never() {
+        builder.ins().jump(merged_block, if_result.as_slice());
+    }
+
+    // else block
     let else_result = {
         builder.switch_to_block(else_block);
         builder.seal_block(else_block);
@@ -329,43 +336,34 @@ fn gen_if_else<'e>(
             None => Value::Empty,
         }
     };
+    if !else_result.is_never() {
+        builder.ins().jump(merged_block, else_result.as_slice());
+    }
 
-    match (&if_result, &else_result) {
-        // both diverges
-        (Value::Never, Value::Never) => Value::Never,
-        // the if-branch diverges but else-branch don't
-        (Value::Never, _) => {
-            builder.switch_to_block(else_block);
-            else_result
-        }
-        // the else-branch diverges but if-branch don't
-        (_, Value::Never) => {
-            builder.switch_to_block(if_block);
-            if_result
-        }
-        // both returns
-        (_, _) => {
-            let merged_block = builder.create_block();
-            // builder is currently on the else block
-            builder.ins().jump(merged_block, else_result.as_slice());
-            builder.switch_to_block(if_block);
-            builder.ins().jump(merged_block, if_result.as_slice());
-            // check if result type matches
-            if !if_result.type_matches(&else_result) {
-                panic!("Expects same type of value from `if` block and `else` block, but the if block returns {} and the else block returns {}", if_result.display(), else_result.display());
-            }
-            builder.switch_to_block(merged_block);
-            builder.seal_block(merged_block);
-            match if_result {
-                Value::Empty => Value::Empty,
-                Value::Single(..) => builder.append_block_param(merged_block, I64).into(),
-                Value::Tuple(vals) => (0..vals.len())
-                    .map(|_| builder.append_block_param(merged_block, I64))
-                    .collect::<Vec<ClifValue>>()
-                    .into(),
-                Value::Never => unreachable!(),
-            }
-        }
+    // merged block
+    // check number of results
+    if !if_result.type_matches(&else_result) {
+        panic!(
+            "Expects same type of value from `if` block and `else` block, but found the if block returns {} and the else block returns {}",
+            if_result.display(),
+            else_result.display());
+    }
+    builder.switch_to_block(merged_block);
+    builder.seal_block(merged_block);
+    let result = match (if_result, else_result) {
+        (Value::Never, Value::Never) => return Value::Never,
+        (x, Value::Never) => x,
+        (Value::Never, x) => x,
+        (x, _) => x,
+    };
+    match result {
+        Value::Empty => Value::Empty,
+        Value::Single(_) => builder.append_block_param(merged_block, I64).into(),
+        Value::Tuple(vals) => (0..vals.len())
+            .map(|_| builder.append_block_param(merged_block, I64))
+            .collect::<Vec<ClifValue>>()
+            .into(),
+        Value::Never => Value::Never,
     }
 }
 
@@ -407,7 +405,7 @@ fn gen_call<'f, 'e>(
 ) -> Value {
     let name = callee
         .as_id()
-        .expect("Dynamic function calling is not supported yet");
+        .expect("Indirect function calling is not supported");
     let (sig, func_ref) = import_func_if_needed(builder, global, local, name);
     if args.len() != sig.params.len() {
         panic!(
