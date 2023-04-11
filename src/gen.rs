@@ -106,7 +106,7 @@ fn gen_assign<'f, 'e>(
     local: &mut LocalContext<'e>,
     lhs: &'e Expr,
     rhs: &'e Expr,
-) {
+) -> Value {
     match lhs {
         Expr::Id(name) => gen_assign_var(builder, global, local, &name, rhs),
         Expr::Tuple(fields) => gen_assign_tuple(builder, global, local, &fields, rhs),
@@ -122,10 +122,11 @@ fn gen_assign_var<'e>(
     local: &mut LocalContext<'e>,
     lhs: &'e str,
     rhs: &'e Expr,
-) {
+) -> Value {
     let lhs = local.expect_var(lhs);
-    let rhs = gen_operand(builder, global, local, rhs).expect_single();
-    builder.def_var(lhs, rhs);
+    let rhs = gen_operand(builder, global, local, rhs)?;
+    builder.def_var(lhs, rhs.expect_single());
+    Value::Empty
 }
 
 /// Generate an assignment statement with a tuple as lhs, called by `gen_assign`
@@ -137,21 +138,21 @@ fn gen_assign_tuple<'e>(
     local: &mut LocalContext<'e>,
     lhs: &'e [Expr],
     rhs: &'e Expr,
-) {
+) -> Value {
     match rhs {
         Expr::Tuple(rhs) => {
-            lhs.iter().zip(rhs).for_each(|(lhs, rhs)| {
-                let lhs = local.expect_var(lhs.as_id().expect(
-                    "Only identifier or tuple of identifiers is allowed as LHS of an assignment",
-                ));
-                let rhs = gen_operand(builder, global, local, rhs)
-                    .as_single()
-                    .expect("Nested tuples are not allowed, flatten it first before assigning");
-                builder.def_var(lhs, rhs);
-            });
+            for (lhs, rhs) in lhs.iter().zip(rhs) {
+                gen_assign_var(
+                    builder,
+                    global,
+                    local,
+                    lhs.as_id().expect("Nested tuples are not allowed"),
+                    rhs,
+                )?;
+            }
         }
         expr => {
-            let rhs = gen_operand(builder, global, local, expr);
+            let rhs = gen_operand(builder, global, local, expr)?;
             lhs.iter()
                 .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as LHS of an assignment"))
                 .zip(rhs.values())
@@ -172,16 +173,18 @@ fn gen_assign_tuple<'e>(
             }
         }
     }
+    Value::Empty
 }
 
 /// Generate a `let` statement
+/// Returns either `Empty` or `Never`
 fn gen_let<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
     local: &mut LocalContext<'e>,
     lhs: &'e Expr,
     rhs: &'e Expr,
-) {
+) -> Value {
     match lhs {
         Expr::Id(name) => gen_let_var(builder, global, local, &name, rhs),
         Expr::Tuple(fields) => gen_let_tuple(builder, global, local, &fields, rhs),
@@ -197,14 +200,14 @@ fn gen_let_var<'e>(
     local: &mut LocalContext<'e>,
     lhs: &'e str,
     rhs: &'e Expr,
-) {
-    let rhs = gen_operand(builder, global, local, rhs).expect_single();
+) -> Value {
+    let rhs = gen_operand(builder, global, local, rhs)?;
     let var = declare_var(builder, local, lhs);
-    builder.def_var(var, rhs);
+    builder.def_var(var, rhs.expect_single());
+    Value::Empty
 }
 
 /// Generate a `let` statement with a tuple as lhs, called by `gen_let`
-#[allow(unused_variables)]
 #[inline(always)]
 fn gen_let_tuple<'e>(
     builder: &mut FunctionBuilder<'_>,
@@ -212,21 +215,21 @@ fn gen_let_tuple<'e>(
     local: &mut LocalContext<'e>,
     lhs: &'e [Expr],
     rhs: &'e Expr,
-) {
+) -> Value {
     match rhs {
         Expr::Tuple(rhs) => {
-            lhs.iter().zip(rhs).for_each(|(lhs, rhs)| {
+            for (lhs, rhs) in lhs.iter().zip(rhs) {
                 gen_let_var(
                     builder,
                     global,
                     local,
-                    lhs.as_id().expect("Nested tuples are not allowed"),
+                    lhs.as_id().expect("nested tuples are not allowed"),
                     rhs,
-                );
-            });
+                )?;
+            }
         }
         expr => {
-            let rhs = gen_operand(builder, global, local, expr);
+            let rhs = gen_operand(builder, global, local, expr)?;
             lhs.iter()
                 .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as lhs of an assignment"))
                 .zip(rhs.values())
@@ -247,6 +250,7 @@ fn gen_let_tuple<'e>(
             }
         }
     }
+    Value::Empty
 }
 
 fn gen_loop<'e>(
@@ -266,7 +270,7 @@ fn gen_loop<'e>(
     builder.switch_to_block(loop_block);
     let mut is_terminated = false;
     for expr in &block.body {
-        if !gen_statement(builder, global, local, expr) {
+        if gen_statement(builder, global, local, expr).is_never() {
             is_terminated = true;
             break;
         }
@@ -329,13 +333,7 @@ fn gen_if_else<'e>(
         builder.seal_block(else_block);
         match else_ast_block {
             Some(block) => gen_block(builder, global, local, block),
-            None => {
-                match if_result {
-                    Value::Empty | Value::Never=> (),
-                    _ => panic!("Type of the return value from `if` block doesn't match the value from `else` block, the if block returns {} but the else block returns nothing", if_result.display()),
-                }
-                Value::Empty
-            }
+            None => Value::Empty,
         }
     };
     if !else_result.is_never() {
@@ -404,7 +402,7 @@ fn gen_call<'f, 'e>(
     local: &mut LocalContext<'e>,
     callee: &'e Expr,
     args: &'e Vec<Expr>,
-) -> ClifValue {
+) -> Value {
     let name = callee
         .as_id()
         .expect("Dynamic function calling is not supported yet");
@@ -421,7 +419,7 @@ fn gen_call<'f, 'e>(
         .map(|e| gen_operand(builder, global, local, e).expect_single())
         .collect();
     let inst = builder.ins().call(func_ref, args.as_ref());
-    *builder.inst_results(inst).iter().next().unwrap()
+    Value::from(*builder.inst_results(inst).iter().next().unwrap())
 }
 
 /// Generate IR for a block, if the block has a tail, return the value of the tail, otherwise
@@ -436,29 +434,20 @@ fn gen_block<'f, 'e>(
         [] => Value::Empty,
         [expr] => match expr {
             Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
-            expr => match gen_statement(builder, global, local, &expr) {
-                true => Value::Empty,
-                false => Value::Never,
-            },
+            expr => gen_statement(builder, global, local, &expr),
         },
         body => {
             local.enters_block();
             // first generate for expressions except the last one ...
             for expr in unsafe { body.get_unchecked(0..body.len() - 1) }.iter() {
-                match gen_statement(builder, global, local, &expr) {
-                    true => continue,
-                    false => return Value::Never,
-                }
+                gen_statement(builder, global, local, &expr)?;
             }
             // ... and then if the last one is a tail, return the value of the tail, otherwise
             // return `Empty`.
             let last = unsafe { body.get_unchecked(body.len() - 1) };
             let val = match last {
                 Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
-                expr => match gen_statement(builder, global, local, &expr) {
-                    true => Value::Empty,
-                    false => Value::Never,
-                },
+                expr => gen_statement(builder, global, local, &expr),
             };
             local.leaves_block();
             val
@@ -467,35 +456,34 @@ fn gen_block<'f, 'e>(
 }
 
 /// Generate IR for a statement.
-/// Returns `false` if encountering a `Never` statement (`break` and `continue`).
+/// Only returns Value::Empty or Value::Never
 fn gen_statement<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
     local: &mut LocalContext<'e>,
     expr: &'e Expr,
-) -> bool {
+) -> Value {
     match expr {
-        Expr::Let(lhs, rhs) => gen_let(builder, global, local, lhs, rhs),
-        Expr::Call(callee, args) => {
-            gen_call(builder, global, local, callee, args);
+        Expr::Let(lhs, rhs) => {
+            gen_let(builder, global, local, lhs, rhs);
+            Value::Empty
         }
-        Expr::Block(body) => {
-            gen_block(builder, global, local, &body).expect_empty();
+        Expr::Assign(lhs, rhs) => {
+            gen_assign(builder, global, local, lhs, rhs);
+            Value::Empty
         }
-        Expr::IfElse(cond, if_body, else_body) => {
-            gen_if_else(
-                builder,
-                global,
-                local,
-                cond,
-                if_body.as_block().unwrap(),
-                else_body.as_ref().map(|e| e.as_block().unwrap()),
-            )
-            .expect_empty();
-        }
-        Expr::Loop(body) => {
-            gen_loop(builder, global, local, body.as_block().unwrap()).expect_empty();
-        }
+        Expr::Call(callee, args) => gen_call(builder, global, local, callee, args).consume(),
+        Expr::Block(body) => gen_block(builder, global, local, &body).consume(),
+        Expr::IfElse(cond, if_body, else_body) => gen_if_else(
+            builder,
+            global,
+            local,
+            cond,
+            if_body.as_block().unwrap(),
+            else_body.as_ref().map(|e| e.as_block().unwrap()),
+        )
+        .consume(),
+        Expr::Loop(body) => gen_loop(builder, global, local, body.as_block().unwrap()).consume(),
         Expr::Break(expr) => {
             let val = expr.as_ref().map_or(Value::Empty, |expr| {
                 gen_operand(builder, global, local, &expr)
@@ -506,7 +494,7 @@ fn gen_statement<'f, 'e>(
             parent_loop.check_break_val(val.ty());
             let break_block = parent_loop.break_block;
             builder.ins().jump(break_block, val.as_slice());
-            return false;
+            Value::Never
         }
         Expr::Continue => {
             let continue_block = local
@@ -514,12 +502,10 @@ fn gen_statement<'f, 'e>(
                 .expect("Using `continue` outside of a loop")
                 .continue_block;
             builder.ins().jump(continue_block, &[]);
-            return false;
+            Value::Never
         }
-        Expr::Assign(lhs, rhs) => gen_assign(builder, global, local, &lhs, &rhs),
         e => panic!("Expression not allowed as a statement: {e:?}"),
     }
-    true
 }
 
 #[inline(always)]

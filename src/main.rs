@@ -1,4 +1,5 @@
 #![feature(string_leak)]
+#![feature(try_trait_v2)]
 
 use std::{env, fs, path::PathBuf};
 

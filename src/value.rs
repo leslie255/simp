@@ -1,15 +1,18 @@
-use std::{fmt::Display, slice};
+use std::{fmt::Display, slice, ops::{Try, FromResidual, ControlFlow}};
 
 pub use cranelift::prelude::Value as ClifValue;
 
 /// A value in SIMP lang, could contain zero, one, or more clif values.
-/// There is also the `Never` variant which indicates a value will never be returned from an
-/// expression, such as `break` and `continue`. The `Never` type can be coerced into any type
+/// Additionally, the `Never` variant which indicates a value will never be returned from an
+/// expression, such as `break` and `continue`. The `Never` type can be coerced into any type.
+/// `Value` also implements `Try` trait in order to return `Never` if `self` is `Never`
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
     Empty,
+    /// Uses an array internally in order for `Value::slice` to work
     Single([ClifValue; 1]),
     Tuple(Vec<ClifValue>),
+    /// Value of a terminating expression, such as `break` and `continue`
     Never,
 }
 
@@ -17,6 +20,7 @@ impl Value {
     /// Returns `true` if the value is [`Empty`].
     ///
     /// [`Empty`]: Value::Empty
+    #[allow(dead_code)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         matches!(self, Self::Empty)
@@ -39,15 +43,6 @@ impl Value {
                     self.display()
                 );
             }
-        }
-    }
-
-    pub fn expect_empty(&self) {
-        if !self.is_empty() {
-            panic!(
-                "Expects no return value, but {} is provided",
-                self.display()
-            )
         }
     }
 
@@ -149,6 +144,37 @@ impl Value {
             Value::Tuple(vals) => ValueType::Tuple(vals.len()),
             Value::Never => ValueType::Never,
         }
+    }
+
+    /// Returns `Never` if `self` is `Never`, otherwise returns `Empty`
+    pub fn consume(self) -> Self {
+        match self {
+            Self::Never => Self::Never,
+            _ => Self::Empty,
+        }
+    }
+}
+
+impl Try for Value {
+    type Output = Value;
+
+    type Residual = Value;
+
+    fn from_output(output: Self::Output) -> Self {
+        output
+    }
+
+    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+        match self {
+            Value::Never => ControlFlow::Break(Value::Never),
+            val => ControlFlow::Continue(val),
+        }
+    }
+}
+
+impl FromResidual for Value {
+    fn from_residual(residual: <Self as Try>::Residual) -> Self {
+        residual
     }
 }
 
