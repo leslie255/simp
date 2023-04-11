@@ -14,6 +14,7 @@ mod ast;
 mod gen;
 mod symbols;
 mod token;
+mod value;
 
 fn main() {
     let (input, output) = {

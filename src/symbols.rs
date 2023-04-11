@@ -4,7 +4,7 @@ use cranelift::prelude::{Block, EntityRef, Signature};
 use cranelift_codegen::ir::FuncRef;
 use cranelift_frontend::Variable;
 
-use crate::gen::ValueType;
+use crate::value::ValueType;
 
 /// Information about the parent loop block, stored inside `LocalContext` as a stack
 #[derive(Clone, Copy, Debug)]
