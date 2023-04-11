@@ -12,6 +12,7 @@ pub enum Token {
     Continue,
     Fn,
     Let,
+    Return,
 
     Eq,
     EqEq,
@@ -246,6 +247,7 @@ fn take_id(first: char, chars: &mut Peekable<Chars<'_>>) -> Token {
         "continue" => Token::Continue,
         "fn" => Token::Fn,
         "let" => Token::Let,
+        "return" => Token::Return,
         _ => Token::Id(id),
     }
 }

@@ -39,6 +39,7 @@ pub enum Expr {
     IfElse(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
     Loop(Box<Expr>),
     Break(Option<Box<Expr>>),
+    Return(Option<Box<Expr>>),
     Continue,
     Call(Box<Expr>, Vec<Expr>),
     #[allow(dead_code)]
@@ -230,6 +231,14 @@ fn parse_break(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     }
 }
 
+#[inline(always)]
+fn parse_return(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
+    match tokens.peek()? {
+        Token::Semicolon | Token::BraceClose => Some(Expr::Return(None)),
+        _ => Some(Expr::Return(Some(Box::new(parse_expr(15, tokens)?)))),
+    }
+}
+
 #[must_use]
 fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
@@ -251,6 +260,7 @@ fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr
         Token::Continue => Expr::Continue,
         Token::Fn => parse_fn(tokens)?,
         Token::Let => parse_let(tokens)?,
+        Token::Return => parse_return(tokens)?,
         Token::ExcEq => panic!("Unexpected `!=`"),
         Token::Eq => panic!("Unexpected `=`"),
         Token::EqEq => panic!("Unexpected `==`"),

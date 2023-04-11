@@ -42,20 +42,20 @@ pub struct LocalContext<'e> {
     vars: Vec<HashMap<&'e str, Variable>>,
     next_var_id: usize,
     loops: Vec<LoopInfo>,
-}
-
-impl<'e> Default for LocalContext<'e> {
-    fn default() -> Self {
-        Self {
-            imported_funcs: HashMap::default(),
-            vars: vec![HashMap::default()],
-            next_var_id: 0,
-            loops: Vec::default(),
-        }
-    }
+    exit_block: Block,
 }
 
 impl<'e> LocalContext<'e> {
+    pub fn new(exit_block: Block) -> Self {
+        Self {
+            imported_funcs: HashMap::new(),
+            vars: vec![HashMap::new()],
+            next_var_id: 0,
+            loops: Vec::new(),
+            exit_block,
+        }
+    }
+
     fn var_stack_top_mut(&mut self) -> &mut HashMap<&'e str, Variable> {
         self.vars.last_mut().expect("Local symbol stack is empty")
     }
@@ -133,6 +133,10 @@ impl<'e> LocalContext<'e> {
             Entry::Occupied(o) => *o.get(),
             Entry::Vacant(v) => *v.insert(f()),
         }
+    }
+
+    pub fn exit_block(&self) -> Block {
+        self.exit_block
     }
 }
 

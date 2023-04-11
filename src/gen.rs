@@ -502,6 +502,12 @@ fn gen_statement<'f, 'e>(
             builder.ins().jump(continue_block, &[]);
             Value::Never
         }
+        Expr::Return(None) => todo!("Non-i64 return values"),
+        Expr::Return(Some(expr)) => {
+            let val = gen_operand(builder, global, local, expr);
+            builder.ins().jump(local.exit_block(), val.as_slice());
+            Value::Never
+        }
         e => panic!("Expression not allowed as a statement: {e:?}"),
     }
 }
@@ -543,7 +549,6 @@ pub fn compile_func(
     };
     let mut func = Function::with_name_signature(UserFuncName::user(0, func_index), sig);
     let mut builder = FunctionBuilder::new(&mut func, builder_ctx);
-    let mut local = LocalContext::default();
     let entry_block = {
         let b = builder.create_block();
         builder.append_block_params_for_function_params(b);
@@ -551,6 +556,12 @@ pub fn compile_func(
         builder.seal_block(b);
         b
     };
+    let (exit_block, exit_val) = {
+        let b = builder.create_block();
+        let exit_val = builder.append_block_param(b, I64);
+        (b,exit_val)
+    };
+    let mut local = LocalContext::new(exit_block);
     arg_names.iter().enumerate().for_each(|(i, name)| {
         let var = local.create_var(name);
         let val = *unsafe { builder.block_params(entry_block).get_unchecked(i) };
@@ -558,8 +569,16 @@ pub fn compile_func(
         builder.def_var(var, val);
     });
 
+    // generate body
     let return_val = gen_operand(&mut builder, global, &mut local, &body);
-    builder.ins().return_(return_val.as_slice());
+    if !return_val.is_never() {
+        builder.ins().jump(exit_block, return_val.as_slice());
+    }
+
+    // generate exit block
+    builder.switch_to_block(exit_block);
+    builder.seal_block(exit_block);
+    builder.ins().return_(&[exit_val]);
 
     builder.finalize();
     println!("{}", func.display());
