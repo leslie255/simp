@@ -1,6 +1,6 @@
 #![feature(string_leak)]
 
-use std::fs;
+use std::{env, fs, path::PathBuf};
 
 use ast::AstParser;
 use cranelift_codegen::settings;
@@ -16,19 +16,30 @@ mod symbols;
 mod token;
 
 fn main() {
-    let ast = make_parser(
-        r#"
-        // lol
-        /* nested /* comments */ test */
-fn main() = {
-    /**/
-    let x = 256;
-    let y = 255;
-    (x, y) = (y, x);
-    x
-};
-"#,
-    );
+    let (input, output) = {
+        let mut args = env::args();
+        let mut input = Option::<String>::None;
+        let mut output = Option::<String>::None;
+        args.next().unwrap();
+        loop {
+            match args.next() {
+                Some(s) if &s == "-o" => {
+                    output = Some(args.next().expect("Expects an output path after `-o`"));
+                }
+                Some(path) => {
+                    if input.is_some() {
+                        panic!("multiple input paths are not allowed");
+                    }
+                    input = Some(path);
+                }
+                None => break,
+            }
+        }
+        let input = input.expect("Expects an input path");
+        let output = output.unwrap_or(derive_out_path(input.to_string()));
+        (input, output)
+    };
+    let ast = make_parser(String::leak(fs::read_to_string(input).unwrap()));
     let mut obj_module = {
         let isa = cranelift_native::builder()
             .expect("Error getting the native ISA")
@@ -49,7 +60,13 @@ fn main() = {
         let obj = obj_module.finish();
         obj.emit().unwrap()
     };
-    write_bytes_to_file("output.o", bytes.as_ref()).unwrap();
+    write_bytes_to_file(&output, bytes.as_ref()).unwrap();
+}
+
+fn derive_out_path(in_path: String) -> String {
+    let mut out_path = PathBuf::from(in_path);
+    out_path.set_extension("o");
+    out_path.to_string_lossy().to_string()
 }
 
 fn write_bytes_to_file(path: &str, buf: &[u8]) -> std::io::Result<()> {

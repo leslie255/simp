@@ -7,6 +7,9 @@
 output
 output.o
 a.out
+test.simp
+test.o
+test
 
 *~
 \#*\#
