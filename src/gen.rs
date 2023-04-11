@@ -311,23 +311,16 @@ fn gen_if_else<'e>(
 ) -> Value {
     let if_block = builder.create_block();
     let else_block = builder.create_block();
-    let merged_block = builder.create_block();
 
     // cmp
-    let cond_val = gen_operand(builder, global, local, cond).expect_single();
+    let cond_val = gen_operand(builder, global, local, cond)?.expect_single();
     builder.ins().brif(cond_val, if_block, &[], else_block, &[]);
 
-    // if block
     let if_result = {
         builder.switch_to_block(if_block);
         builder.seal_block(if_block);
         gen_block(builder, global, local, if_ast_block)
     };
-    if !if_result.is_never() {
-        builder.ins().jump(merged_block, if_result.as_slice());
-    }
-
-    // else block
     let else_result = {
         builder.switch_to_block(else_block);
         builder.seal_block(else_block);
@@ -336,34 +329,43 @@ fn gen_if_else<'e>(
             None => Value::Empty,
         }
     };
-    if !else_result.is_never() {
-        builder.ins().jump(merged_block, if_result.as_slice());
-    }
 
-    // merged block
-    // check number of results
-    if !if_result.matches_val_type(&else_result) {
-        panic!(
-            "Expects same type of value from `if` block and `else` block, but found the if block returns {} and the else block returns {}",
-            if_result.display(),
-            else_result.display());
-    }
-    builder.switch_to_block(merged_block);
-    builder.seal_block(merged_block);
-    let result = match (if_result, else_result) {
-        (Value::Never, Value::Never) => return Value::Never,
-        (x, Value::Never) => x,
-        (Value::Never, x) => x,
-        (x, _) => x,
-    };
-    match result {
-        Value::Empty => Value::Empty,
-        Value::Single(_) => builder.append_block_param(merged_block, I64).into(),
-        Value::Tuple(vals) => (0..vals.len())
-            .map(|_| builder.append_block_param(merged_block, I64))
-            .collect::<Vec<ClifValue>>()
-            .into(),
-        Value::Never => Value::Never,
+    match (&if_result, &else_result) {
+        // both diverges
+        (Value::Never, Value::Never) => Value::Never,
+        // the if-branch diverges but else-branch don't
+        (Value::Never, _) => {
+            builder.switch_to_block(else_block);
+            else_result
+        }
+        // the else-branch diverges but if-branch don't
+        (_, Value::Never) => {
+            builder.switch_to_block(if_block);
+            if_result
+        }
+        // both returns
+        (_, _) => {
+            let merged_block = builder.create_block();
+            // builder is currently on the else block
+            builder.ins().jump(merged_block, else_result.as_slice());
+            builder.switch_to_block(if_block);
+            builder.ins().jump(merged_block, if_result.as_slice());
+            // check if result type matches
+            if !if_result.type_matches(&else_result) {
+                panic!("Expects same type of value from `if` block and `else` block, but the if block returns {} and the else block returns {}", if_result.display(), else_result.display());
+            }
+            builder.switch_to_block(merged_block);
+            builder.seal_block(merged_block);
+            match if_result {
+                Value::Empty => Value::Empty,
+                Value::Single(..) => builder.append_block_param(merged_block, I64).into(),
+                Value::Tuple(vals) => (0..vals.len())
+                    .map(|_| builder.append_block_param(merged_block, I64))
+                    .collect::<Vec<ClifValue>>()
+                    .into(),
+                Value::Never => unreachable!(),
+            }
+        }
     }
 }
 
@@ -422,8 +424,7 @@ fn gen_call<'f, 'e>(
     Value::from(*builder.inst_results(inst).iter().next().unwrap())
 }
 
-/// Generate IR for a block, if the block has a tail, return the value of the tail, otherwise
-/// return iconst 0
+/// Generate IR for a block
 fn gen_block<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
@@ -432,18 +433,23 @@ fn gen_block<'f, 'e>(
 ) -> Value {
     match block.body.as_slice() {
         [] => Value::Empty,
+        // If there is only one expressions
         [expr] => match expr {
             Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
             expr => gen_statement(builder, global, local, &expr),
         },
+        // If there are more than one expressions
         body => {
             local.enters_block();
             // first generate for expressions except the last one ...
             for expr in unsafe { body.get_unchecked(0..body.len() - 1) }.iter() {
-                gen_statement(builder, global, local, &expr)?;
+                if gen_statement(builder, global, local, &expr).is_never() {
+                    local.leaves_block();
+                    return Value::Never;
+                }
             }
             // ... and then if the last one is a tail, return the value of the tail, otherwise
-            // return `Empty`.
+            // treat it as a statement.
             let last = unsafe { body.get_unchecked(body.len() - 1) };
             let val = match last {
                 Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
@@ -456,7 +462,7 @@ fn gen_block<'f, 'e>(
 }
 
 /// Generate IR for a statement.
-/// Only returns Value::Empty or Value::Never
+/// Only returns `Value::Empty` or `Value::Never`
 fn gen_statement<'f, 'e>(
     builder: &mut FunctionBuilder<'f>,
     global: &mut GlobalSymbols,
@@ -464,14 +470,8 @@ fn gen_statement<'f, 'e>(
     expr: &'e Expr,
 ) -> Value {
     match expr {
-        Expr::Let(lhs, rhs) => {
-            gen_let(builder, global, local, lhs, rhs);
-            Value::Empty
-        }
-        Expr::Assign(lhs, rhs) => {
-            gen_assign(builder, global, local, lhs, rhs);
-            Value::Empty
-        }
+        Expr::Let(lhs, rhs) => gen_let(builder, global, local, lhs, rhs),
+        Expr::Assign(lhs, rhs) => gen_assign(builder, global, local, lhs, rhs),
         Expr::Call(callee, args) => gen_call(builder, global, local, callee, args).consume(),
         Expr::Block(body) => gen_block(builder, global, local, &body).consume(),
         Expr::IfElse(cond, if_body, else_body) => gen_if_else(

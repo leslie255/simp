@@ -86,7 +86,7 @@ impl Value {
     /// - `Never` can be coerced to any types
     /// - `Tuple`s of 1 value can be coerced to `Single`
     /// - `Tuple`s with 0 values can be coerced to `Empty`
-    pub fn matches_val_type(&self, other: &Self) -> bool {
+    pub fn type_matches(&self, other: &Self) -> bool {
         match (self, other) {
             (_, Self::Never)
             | (Self::Never, _)
