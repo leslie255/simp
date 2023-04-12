@@ -141,6 +141,13 @@ fn gen_assign_tuple<'e>(
 ) -> Value {
     match rhs {
         Expr::Tuple(rhs) => {
+            if lhs.len() != rhs.len() {
+                panic!(
+                    "The LHS has {} fields but RHS has {} fields",
+                    lhs.len(),
+                    rhs.len()
+                );
+            }
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 gen_assign_var(
                     builder,
@@ -218,6 +225,13 @@ fn gen_let_tuple<'e>(
 ) -> Value {
     match rhs {
         Expr::Tuple(rhs) => {
+            if lhs.len() != rhs.len() {
+                panic!(
+                    "The LHS has {} fields but RHS has {} fields",
+                    lhs.len(),
+                    rhs.len()
+                );
+            }
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 gen_let_var(
                     builder,
@@ -239,7 +253,7 @@ fn gen_let_tuple<'e>(
                 });
             if !rhs.can_be_assigned_to_expr_of_len(lhs.len()) {
                 panic!(
-                    "The LHS is {} but the rhs is {}",
+                    "The LHS is {} but the RHS is {}",
                     match lhs.len() {
                         0 => "nothing".to_string(),
                         1 => "one variable".to_string(),
@@ -559,7 +573,7 @@ pub fn compile_func(
     let (exit_block, exit_val) = {
         let b = builder.create_block();
         let exit_val = builder.append_block_param(b, I64);
-        (b,exit_val)
+        (b, exit_val)
     };
     let mut local = LocalContext::new(exit_block);
     arg_names.iter().enumerate().for_each(|(i, name)| {
