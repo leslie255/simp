@@ -30,7 +30,10 @@ impl LoopInfo {
     pub fn check_break_val(&mut self, new_ty: ValueType) -> bool {
         match self.val_ty {
             Some(prev) => prev.matches(new_ty),
-            None => false,
+            None => {
+                self.val_ty = Some(new_ty);
+                true
+            }
         }
     }
 }
@@ -94,7 +97,7 @@ impl<'e> LocalContext<'e> {
     }
 
     /// Get the parent loop
-    pub fn parent_loop(&mut self) -> Option<LoopInfo> {
+    pub fn parent_loop(&self) -> Option<LoopInfo> {
         self.loops.last().copied()
     }
 

@@ -12,7 +12,7 @@ use cranelift_object::ObjectModule;
 use crate::{
     ast::{Block as AstBlock, Expr},
     symbols::{GlobalSymbols, LocalContext},
-    value::{ClifValue, Value, ValueType},
+    value::{ClifValue, Value, ValueType}, ExpectTrue,
 };
 
 /// Declares a new variable in the local symbol space and in the function builder
@@ -503,7 +503,9 @@ fn gen_statement<'f, 'e>(
             let parent_loop = local
                 .parent_loop_mut()
                 .expect("Using `break` outside of a loop");
-            parent_loop.check_break_val(val.ty());
+            parent_loop
+                .check_break_val(val.ty())
+                .expect_true("Expects multiple `break`s from a loop to carry the same type");
             let break_block = parent_loop.break_block;
             builder.ins().jump(break_block, val.as_slice());
             Value::Never
