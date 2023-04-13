@@ -25,8 +25,8 @@ impl LoopInfo {
         }
     }
 
-    /// If there was a `break` statement previously encountered, check if `new_count` matches the
-    /// old `val_count`, otherwise, set the `val_count` to `new_count`.
+    /// If there was a `break` statement previously encountered, check if `new_ty` matches the
+    /// old `val_ty`, otherwise, set the `val_ty` to `new_ty`.
     pub fn check_break_val(&mut self, new_ty: ValueType) -> bool {
         match self.val_ty {
             Some(prev) => prev.matches(new_ty),
