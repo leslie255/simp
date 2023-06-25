@@ -38,6 +38,7 @@ Defining a function:
 ```rust
 // All functions have only one expression,
 // the result of this expression is the return value of the function
+// Also +-*/% works just like any programming language ever
 fn inc(x) = x + 1;
 
 // But a block is also an expression which returns its tail,
@@ -48,24 +49,27 @@ fn main() = {
 };
 ```
 
-Notably, all values are `i64` in SIMP for simplicity sake.
+Notably, all values are `i64` in SIMP for simplicity sake. And all functions returns one `i64` value.
 
-But there is a partial type system such that there can be tuple assignments and expressions that don't return anything (such as `let`) or never returns (`break`, `continue`, `return`).
+But there is a partial type system that allows for tupled values, single values, empty values, and unreachabe values.
 
-Control flow works like every programming language ever, except there is not `for` or `while` loop,
+Such that there can be tuple assignments, expressions that don't return anything (such as `let`), and expressions that never returns (`break`, `continue`, `return`).
+
+Control flow works like every programming language ever, except there is no `for` or `while` loop,
 only a `loop` loop which require you to manually break out of. Like Rust, `break` can also carry a value.
 
 ```rust
-// A weird way of returning zero, just to show that `break` can carry a value.
+// A weird way of returning zero just to show that `break` can carry a value.
 fn zero() = loop { break 0; };
 
 fn main() = {
     // All variables are mutable
     // If-else returns value
-    // The compiler would check for if the return value from both branches are the same type,
-    // here, `return 255;` has value of type `never`, which can be coerced into any types
+    // The compiler would check for if the return type of the two branches matches.
+    // here, `return 255;` has value of type `never`, which can be coerced into any type
     let i = if 1 { zero() } else { return 255; };
 
+    // Note that all expressions has to end with semicolons, including control flow statements
     loop {
         i = i + 1;
         if i == 10 {
@@ -81,4 +85,3 @@ fn main() = {
     j
 };
 ```
-
