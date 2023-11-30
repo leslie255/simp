@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use cranelift::prelude::{types::I64, AbiParam, ExtFuncData, ExternalName, InstBuilder, Signature};
 use cranelift_codegen::{
     ir::{condcodes::IntCC, FuncRef, Function, UserExternalName, UserFuncName},
@@ -12,7 +14,7 @@ use cranelift_object::ObjectModule;
 use crate::{
     ast::{Block as AstBlock, Expr},
     symbols::{GlobalSymbols, LocalContext},
-    value::{ClifValue, Value, ValueType}, ExpectTrue,
+    value::{ClifValue, Value, ValueType},
 };
 
 /// Declares a new variable in the local symbol space and in the function builder
@@ -57,7 +59,7 @@ fn gen_operand<'f, 'e>(
         Expr::Le(lhs, rhs) => cmp!(IntCC::SignedLessThan, lhs, rhs),
         Expr::LeEq(lhs, rhs) => cmp!(IntCC::SignedLessThanOrEqual, lhs, rhs),
         Expr::Gr(lhs, rhs) => cmp!(IntCC::SignedGreaterThan, lhs, rhs),
-        Expr::GrEq(lhs, rhs) => cmp!(IntCC::SignedLessThanOrEqual, lhs, rhs),
+        Expr::GrEq(lhs, rhs) => cmp!(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
         Expr::Not(_) => todo!(),
         Expr::UnaryAdd(e) => {
             let val = gen_operand(builder, global, local, e);
@@ -130,7 +132,6 @@ fn gen_assign_var<'e>(
 }
 
 /// Generate an assignment statement with a tuple as lhs, called by `gen_assign`
-#[allow(unused_variables)]
 #[inline(always)]
 fn gen_assign_tuple<'e>(
     builder: &mut FunctionBuilder<'_>,
@@ -140,42 +141,24 @@ fn gen_assign_tuple<'e>(
     rhs: &'e Expr,
 ) -> Value {
     match rhs {
-        Expr::Tuple(rhs) => {
-            if lhs.len() != rhs.len() {
-                panic!(
-                    "The LHS has {} fields but RHS has {} fields",
-                    lhs.len(),
-                    rhs.len()
-                );
-            }
-            for (lhs, rhs) in lhs.iter().zip(rhs) {
-                gen_assign_var(
-                    builder,
-                    global,
-                    local,
-                    lhs.as_id().expect("Nested tuples are not allowed"),
-                    rhs,
-                )?;
-            }
-        }
         expr => {
             let rhs = gen_operand(builder, global, local, expr)?;
             lhs.iter()
                 .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as LHS of an assignment"))
-                .zip(rhs.values())
+                .zip(rhs.child_values())
                 .for_each(|(id, rhs)| {
-                    let var = local.expect_var("id");
+                    let var = local.expect_var(id);
                     builder.def_var(var, rhs);
                 });
             if !rhs.can_be_assigned_to_expr_of_len(lhs.len()) {
                 panic!(
                     "The LHS is {} but the RHS is {}",
                     match lhs.len() {
-                        0 => "nothing".to_string(),
+                        0 => "empty".to_string(),
                         1 => "one variable".to_string(),
                         x => format!("a tuple of {x} variables"),
                     },
-                    rhs.display()
+                    rhs.description()
                 );
             }
         }
@@ -246,7 +229,7 @@ fn gen_let_tuple<'e>(
             let rhs = gen_operand(builder, global, local, expr)?;
             lhs.iter()
                 .map(|e|e.as_id().expect("Only identifier or tuple of identifiers is allowed as lhs of an assignment"))
-                .zip(rhs.values())
+                .zip(rhs.child_values())
                 .for_each(|(id, rhs)| {
                     let var = declare_var(builder, local, id);
                     builder.def_var(var, rhs);
@@ -255,11 +238,11 @@ fn gen_let_tuple<'e>(
                 panic!(
                     "The LHS is {} but the RHS is {}",
                     match lhs.len() {
-                        0 => "nothing".to_string(),
-                        1 => "one variable".to_string(),
-                        x => format!("a tuple of {x} variables"),
+                        0 => Cow::Borrowed("nothing"),
+                        1 => Cow::Borrowed("one variable"),
+                        x => Cow::Owned(format!("a tuple of {x} variables")),
                     },
-                    rhs.display()
+                    rhs.description()
                 );
             }
         }
@@ -280,24 +263,33 @@ fn gen_loop<'e>(
 
     local.enters_loop(break_block, loop_block);
 
-    // loop block
     builder.switch_to_block(loop_block);
-    let mut is_terminated = false;
+    let mut has_break_on_main_branch = false;
+    let mut diverges = false;
     for expr in &block.body {
         if gen_statement(builder, global, local, expr).is_never() {
-            is_terminated = true;
+            if matches!(expr, Expr::Break(..)) {
+                has_break_on_main_branch = true;
+            } else {
+                diverges = true;
+            }
             break;
         }
     }
-    if !is_terminated {
-        builder.ins().jump(loop_block, &[]);
+    let loop_info = unsafe { local.current_loop_mut().unwrap_unchecked() };
+    diverges |= loop_info.break_count == 0;
+    if dbg!(diverges) {
+        loop_info.val_ty = Some(ValueType::Never);
+    } else {
+        if !has_break_on_main_branch {
+            builder.ins().jump(loop_block, &[]);
+        }
     }
     builder.seal_block(loop_block);
 
     // break block
     builder.switch_to_block(break_block);
     builder.seal_block(break_block);
-    let loop_info = unsafe { local.parent_loop().unwrap_unchecked() };
     let break_val = match loop_info.val_ty {
         None | Some(ValueType::Empty) => Value::Empty,
         Some(ValueType::Single) => builder.append_block_param(break_block, I64).into(),
@@ -327,11 +319,9 @@ fn gen_if_else<'e>(
     let else_block = builder.create_block();
     let merged_block = builder.create_block();
 
-    // cmp
     let cond_val = gen_operand(builder, global, local, cond).expect_single();
     builder.ins().brif(cond_val, if_block, &[], else_block, &[]);
 
-    // if block
     let if_result = {
         builder.switch_to_block(if_block);
         builder.seal_block(if_block);
@@ -341,7 +331,6 @@ fn gen_if_else<'e>(
         builder.ins().jump(merged_block, if_result.as_slice());
     }
 
-    // else block
     let else_result = {
         builder.switch_to_block(else_block);
         builder.seal_block(else_block);
@@ -354,30 +343,29 @@ fn gen_if_else<'e>(
         builder.ins().jump(merged_block, else_result.as_slice());
     }
 
-    // merged block
-    // check number of results
-    if !if_result.type_matches(&else_result) {
+    if !if_result.ty().matches(else_result.ty()) {
         panic!(
             "Expects same type of value from `if` block and `else` block, but found the if block returns {} and the else block returns {}",
-            if_result.display(),
-            else_result.display());
+            if_result.description(),
+            else_result.description());
     }
     builder.switch_to_block(merged_block);
     builder.seal_block(merged_block);
-    let result = match (if_result, else_result) {
-        (Value::Never, Value::Never) => return Value::Never,
+    let result_ty = match (if_result, else_result) {
+        (Value::Never, Value::Never) => Value::Never,
         (x, Value::Never) => x,
         (Value::Never, x) => x,
         (x, _) => x,
-    };
-    match result {
-        Value::Empty => Value::Empty,
-        Value::Single(_) => builder.append_block_param(merged_block, I64).into(),
-        Value::Tuple(vals) => (0..vals.len())
+    }
+    .ty();
+    match result_ty {
+        ValueType::Empty => Value::Empty,
+        ValueType::Single => builder.append_block_param(merged_block, I64).into(),
+        ValueType::Tuple(len) => (0..len)
             .map(|_| builder.append_block_param(merged_block, I64))
             .collect::<Vec<ClifValue>>()
             .into(),
-        Value::Never => Value::Never,
+        ValueType::Never => unreachable!(),
     }
 }
 
@@ -443,25 +431,18 @@ fn gen_block<'f, 'e>(
     local: &mut LocalContext<'e>,
     block: &'e AstBlock,
 ) -> Value {
-    match block.body.as_slice() {
+    match &block.body[..] {
         [] => Value::Empty,
-        // If there is only one expressions
-        [expr] => match expr {
-            Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
-            expr => gen_statement(builder, global, local, &expr),
-        },
-        // If there are more than one expressions
         body => {
             local.enters_block();
-            // first generate for expressions except the last one ...
+            // Generate for expressions except the last one.
             for expr in unsafe { body.get_unchecked(0..body.len() - 1) }.iter() {
                 if gen_statement(builder, global, local, &expr).is_never() {
                     local.leaves_block();
                     return Value::Never;
                 }
             }
-            // ... and then if the last one is a tail, return the value of the tail, otherwise
-            // treat it as a statement.
+            // If the last one is a tail, return the value of the tail, otherwise treat it as a normal statement.
             let last = unsafe { body.get_unchecked(body.len() - 1) };
             let val = match last {
                 Expr::Tail(expr) => gen_operand(builder, global, local, &expr),
@@ -500,19 +481,21 @@ fn gen_statement<'f, 'e>(
             let val = expr.as_ref().map_or(Value::Empty, |expr| {
                 gen_operand(builder, global, local, &expr)
             });
-            let parent_loop = local
-                .parent_loop_mut()
+            let current_loop = local
+                .current_loop_mut()
                 .expect("Using `break` outside of a loop");
-            parent_loop
-                .check_break_val(val.ty())
-                .expect_true("Expects multiple `break`s from a loop to carry the same type");
-            let break_block = parent_loop.break_block;
+            current_loop.break_count += 1;
+            assert!(
+                current_loop.check_break_val(val.ty()),
+                "Expects multiple `break`s from a loop to carry the same type"
+            );
+            let break_block = current_loop.break_block;
             builder.ins().jump(break_block, val.as_slice());
             Value::Never
         }
         Expr::Continue => {
             let continue_block = local
-                .parent_loop()
+                .current_loop()
                 .expect("Using `continue` outside of a loop")
                 .continue_block;
             builder.ins().jump(continue_block, &[]);
@@ -524,6 +507,7 @@ fn gen_statement<'f, 'e>(
             builder.ins().jump(local.exit_block(), val.as_slice());
             Value::Never
         }
+        Expr::Tail(_) => panic!("Missing semicolon"),
         e => panic!("Expression not allowed as a statement: {e:?}"),
     }
 }
@@ -546,19 +530,20 @@ fn add_func_to_module(func_id: FuncId, func: Function, module: &mut ObjectModule
     module.define_function(func_id, &mut ctx).unwrap();
 }
 
+/// Compiles a function to clif and then add it to the cranelift's `ObjectModule`.
+/// Returns the Clif IR verifier result.
 pub fn compile_func(
     module: &mut ObjectModule,
     global: &mut GlobalSymbols,
     builder_ctx: &mut FunctionBuilderContext,
     (name, arg_names, body): (String, Vec<String>, Option<Box<Expr>>),
+    enable_log: bool,
 ) -> VerifierResult<()> {
     let sig = make_func_signature(&arg_names);
     let func_id = module
         .declare_function(&name, Linkage::Export, &sig)
         .unwrap();
-    let func_index = global
-        .add_func(name, sig.clone())
-        .expect("Redefinition of function");
+    let (_, func_index) = global.add_func(name, sig.clone());
     let body = match body {
         Some(x) => x,
         None => return Ok(()),
@@ -597,7 +582,9 @@ pub fn compile_func(
     builder.ins().return_(&[exit_val]);
 
     builder.finalize();
-    println!("{}", func.display());
+    if enable_log {
+        println!("{}", func.display());
+    }
     verify_function(&func, module.isa().flags())?;
     add_func_to_module(func_id, func, module);
     Ok(())

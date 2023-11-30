@@ -1,22 +1,19 @@
+.vscode/
+
+foo/
+
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,windows,rust,rust-analyzer,vim,visualstudiocode,emacs
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,windows,rust,rust-analyzer,vim,visualstudiocode,emacs
 
 ### Emacs ###
 # -*- mode: gitignore; -*-
 
-output
-output.o
-a.out
-test.simp
-test.o
-test
-
 *~
 \#*\#
 /.emacs.desktop
 /.emacs.desktop.lock
 *.elc
-auto-save-list
+Auto-save-list
 tramp
 .\#*
 

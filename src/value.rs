@@ -1,15 +1,20 @@
-use std::{fmt::Display, slice, ops::{Try, FromResidual, ControlFlow}};
+use std::{
+    fmt::Display,
+    ops::{ControlFlow, FromResidual, Try},
+    slice,
+};
 
 pub use cranelift::prelude::Value as ClifValue;
 
 /// A value in SIMP lang, could contain zero, one, or more clif values.
 /// Additionally, the `Never` variant which indicates a value will never be returned from an
 /// expression, such as `break` and `continue`. The `Never` type can be coerced into any type.
-/// `Value` also implements `Try` trait in order to return `Never` if `self` is `Never`
+/// `Value` also implements `Try` trait to return `Never` if `self` is `Never`, a common
+/// pattern seen in the source code.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Value {
     Empty,
-    /// Uses an array internally in order for `Value::slice` to work
+    /// Uses an array internally in order for `Value::as_slice` to work
     Single([ClifValue; 1]),
     Tuple(Vec<ClifValue>),
     /// Value of a terminating expression, such as `break` and `continue`
@@ -34,20 +39,21 @@ impl Value {
         }
     }
 
+    #[track_caller]
     pub fn expect_single(&self) -> ClifValue {
         match self.as_single() {
             Some(val) => val,
             None => {
                 panic!(
                     "Expects a singular value, but {} is provided",
-                    self.display()
+                    self.description()
                 );
             }
         }
     }
 
     #[allow(dead_code)]
-    pub fn as_tuple(&self) -> Option<&Vec<ClifValue>> {
+    pub fn as_tuple(&self) -> Option<&[ClifValue]> {
         if let Self::Tuple(v) = self {
             Some(v)
         } else {
@@ -64,12 +70,12 @@ impl Value {
         }
     }
 
-    pub fn values(&self) -> Values {
+    pub fn child_values(&self) -> ValuesIter {
         match self {
-            Self::Empty => Values::Empty,
-            &Self::Single(val) => Values::Singular(val[0]),
-            Self::Tuple(vals) => Values::Tuple(vals.iter()),
-            Self::Never => Values::Empty,
+            Self::Empty => ValuesIter::Empty,
+            &Self::Single(val) => ValuesIter::Singular(val[0]),
+            Self::Tuple(vals) => ValuesIter::Tuple(vals.iter()),
+            Self::Never => ValuesIter::Empty,
         }
     }
 
@@ -80,25 +86,6 @@ impl Value {
     #[must_use]
     pub fn is_single(&self) -> bool {
         matches!(self, Self::Single(..))
-    }
-
-    /// Returns whether or not it's valid for `other` to be assigned to `self`.
-    /// - `Never` can be coerced to any types
-    /// - `Tuple`s of 1 value can be coerced to `Single`
-    /// - `Tuple`s with 0 values can be coerced to `Empty`
-    pub fn type_matches(&self, other: &Self) -> bool {
-        match (self, other) {
-            (_, Self::Never)
-            | (Self::Never, _)
-            | (Self::Empty, Self::Empty)
-            | (Self::Single(..), Self::Single(..)) => true,
-            (Self::Empty, Self::Tuple(vals)) if vals.is_empty() => true,
-            (Self::Tuple(vals), Self::Empty) if vals.is_empty() => true,
-            (Self::Single(..), Self::Tuple(vals)) if vals.len() == 1 => true,
-            (Self::Tuple(vals), Self::Single(..)) if vals.len() == 1 => true,
-            (Self::Tuple(l), Self::Tuple(r)) if l.len() == r.len() => true,
-            _ => false,
-        }
     }
 
     /// Checks whether or not it's valid for value of type `self` to be assigned to expression of
@@ -119,12 +106,12 @@ impl Value {
     /// - `"nothing"` for `Value::Empty`
     /// - `"a single integer"` for `Value::Single(..)`
     /// - `"a tuple of {len} fields"` for `Value::Tuple(len)`
-    pub fn display(&self) -> ValueDisplay {
+    pub fn description(&self) -> ValueDescription {
         match self {
-            Self::Empty => ValueDisplay::Empty,
-            Self::Single(..) => ValueDisplay::Single,
-            Self::Tuple(vals) => ValueDisplay::Tuple(vals.len()),
-            Self::Never => ValueDisplay::Never,
+            Self::Empty => ValueDescription::Empty,
+            Self::Single(..) => ValueDescription::Single,
+            Self::Tuple(vals) => ValueDescription::Tuple(vals.len()),
+            Self::Never => ValueDescription::Never,
         }
     }
 
@@ -197,12 +184,12 @@ impl ValueType {
             (_, Self::Never)
             | (Self::Never, _)
             | (Self::Empty, Self::Empty)
-            | (Self::Single, Self::Single) => true,
-            (Self::Empty, Self::Tuple(0)) => true,
-            (Self::Tuple(0), Self::Empty) => true,
-            (Self::Single, Self::Tuple(1)) => true,
-            (Self::Tuple(1), Self::Single) => true,
-            (Self::Tuple(l), Self::Tuple(r)) if l == r => true,
+            | (Self::Single, Self::Single)
+            | (Self::Empty, Self::Tuple(0))
+            | (Self::Tuple(0), Self::Empty)
+            | (Self::Single, Self::Tuple(1))
+            | (Self::Tuple(1), Self::Single) => true,
+            (Self::Tuple(l), Self::Tuple(r)) => l == r,
             _ => false,
         }
     }
@@ -211,13 +198,13 @@ impl ValueType {
 /// An iterator that iterates through the `ClifValue`s contained in a SIMP `Value`.
 /// Can be created by `simp_val.values()`.
 #[derive(Debug, Clone)]
-pub enum Values<'short> {
+pub enum ValuesIter<'short> {
     Empty,
     Singular(ClifValue),
     Tuple(slice::Iter<'short, ClifValue>),
 }
 
-impl Iterator for Values<'_> {
+impl Iterator for ValuesIter<'_> {
     type Item = ClifValue;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -241,20 +228,20 @@ impl Iterator for Values<'_> {
 /// - `"a tuple of {len} fields"` for `Value::Tuple(len)`
 /// - `"a value that would never be obtained"` for `Value::Never`
 #[derive(Debug, Clone, Copy)]
-pub enum ValueDisplay {
+pub enum ValueDescription {
     Empty,
     Single,
     Tuple(usize),
     Never,
 }
 
-impl Display for ValueDisplay {
+impl Display for ValueDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValueDisplay::Empty => write!(f, "nothing"),
-            ValueDisplay::Single => write!(f, "a single integer"),
-            ValueDisplay::Tuple(len) => write!(f, "a tuple of {len} fields"),
-            ValueDisplay::Never => write!(f, "a value that would never be obtained"),
+            Self::Empty => write!(f, "nothing"),
+            Self::Single => write!(f, "a single integer"),
+            Self::Tuple(len) => write!(f, "a tuple of {len} fields"),
+            Self::Never => write!(f, "a value that would never be obtained"),
         }
     }
 }

@@ -11,6 +11,8 @@ use crate::value::ValueType;
 pub struct LoopInfo {
     pub break_block: Block,
     pub continue_block: Block,
+    /// Number of break instructions appeared in the loop (excluding unreachable ones).
+    pub break_count: usize,
     /// Type of value the block returns, used for checking if all the `break` statements in this
     /// loop carrys the same type of value.
     pub val_ty: Option<ValueType>,
@@ -21,6 +23,7 @@ impl LoopInfo {
         Self {
             break_block,
             continue_block,
+            break_count: 0,
             val_ty: None,
         }
     }
@@ -76,33 +79,35 @@ impl<'e> LocalContext<'e> {
             .copied()
     }
 
+    /// Called when entering a non-loop block.
+    /// For loops use `enters_loop`.
     pub fn enters_block(&mut self) {
         self.vars.push(HashMap::new());
     }
 
+    /// Called when leaving a non-loop block.
+    /// For loops use `leaves_loop`.
     pub fn leaves_block(&mut self) {
         self.vars.pop();
     }
 
     /// Called when entering a loop.
-    /// Returns the `LoopInfo` object created
     pub fn enters_loop<'a>(&'a mut self, break_block: Block, continue_block: Block) {
         self.loops.push(LoopInfo::new(break_block, continue_block));
         self.enters_block();
     }
 
+    /// Called when leaving a loop.
     pub fn leaves_loop(&mut self) {
         self.loops.pop();
         self.leaves_block();
     }
 
-    /// Get the parent loop
-    pub fn parent_loop(&self) -> Option<LoopInfo> {
+    pub fn current_loop(&self) -> Option<LoopInfo> {
         self.loops.last().copied()
     }
 
-    /// Get a mutable reference to the  parent loop
-    pub fn parent_loop_mut(&mut self) -> Option<&mut LoopInfo> {
+    pub fn current_loop_mut(&mut self) -> Option<&mut LoopInfo> {
         self.loops.last_mut()
     }
 
@@ -116,10 +121,10 @@ impl<'e> LocalContext<'e> {
 
     /// Returns the variable of `name`, or exits with an error message if a variable of the
     /// provided name is not found
+    #[track_caller]
     pub fn expect_var(&self, name: &'e str) -> Variable {
         self.var(name).unwrap_or_else(|| {
-            println!("Variable does not exist: `{}`", name);
-            std::process::exit(255);
+            panic!("Variable does not exist: `{}`", name)
         })
     }
 
@@ -157,15 +162,16 @@ impl GlobalSymbols {
         self.funcs.get(name)
     }
 
-    /// Add a new function to the symbols, returns index of the function
-    /// returns `Err(())` if the symbol existed, otherwise returns `Ok(index)`
+    /// Add a new function to the symbols, returns index of the function and whether or not it already existed.
+    /// Returns `(true, {index})` if the symbol already existed,
+    /// Returns `(false, {index})` if the symbol didn't exist.
     #[inline(always)]
-    pub fn add_func(&mut self, name: String, sig: Signature) -> Result<u32, ()> {
+    pub fn add_func(&mut self, name: String, sig: Signature) -> (bool, u32) {
         let index = self.next_index;
         self.next_index += 1;
         match self.funcs.insert(name, (index, sig)) {
-            Some(..) => Err(()),
-            None => Ok(index),
+            Some(..) => (true, index),
+            None => (false, index),
         }
     }
 }

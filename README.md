@@ -17,18 +17,33 @@ You can compile a SIMP source file into an object file by:
 
 ```bash
 # compile into source.o:
-./target/release/simp source.simp
-
-# or specify an output path:
-./target/release/simp source.simp -o output.o
+$ ./target/release/simp source.simp -o source.o
 ```
 
-You may then link the output file using any linker you like:
+You may then link the object file using clang:
 
 ```bash
-# using clang or gcc to link with clib:
-clang source.o
-./a.out
+$ clang source.o -o program
+```
+
+Note that if you're on Mac and using the latest versions of Xcode the default linker `ld` used by `clang` may crash. In this case you need to use LLVM's `lld` linker by:
+
+```bash
+$ clang -fuse-ld=/path/to/ld64.lld -o program
+```
+
+To install `lld`, you need to install `LLVM`:
+
+```bash
+# You need to have homebrew, obviously.
+$ brew install llvm
+# Get the path to the LLVM directory.
+# (Usually /opt/homebrew/opt/llvm@17/).
+$ brew info llvm
+# The path to ld64.lld would then be:
+# /opt/homebrew/opt/llvm@17/bin/ld64.lld
+# You may then link the file using:
+$ clang -fuse-ld=/opt/homebrew/opt/llvm@17/bin/ld64.lld source.o -o program
 ```
 
 ## Basic Syntax:
@@ -63,10 +78,10 @@ only a `loop` loop which require you to manually break out of. Like Rust, `break
 fn zero() = loop { break 0; };
 
 fn main() = {
-    // All variables are mutable
-    // If-else returns value
+    // All variables are mutable.
+    // If-else returns value.
     // The compiler would check for if the return type of the two branches matches.
-    // here, `return 255;` has value of type `never`, which can be coerced into any type
+    // here, `return 255;` has value of type `never`, which can be coerced into any type.
     let i = if 1 { zero() } else { return 255; };
 
     // Note that all expressions has to end with semicolons, including control flow statements
@@ -74,7 +89,7 @@ fn main() = {
         i = i + 1;
         if i == 10 {
             break;
-        }
+        };
     };
 
     let j = i * 2;

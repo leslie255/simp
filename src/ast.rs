@@ -1,9 +1,6 @@
 use std::iter::Peekable;
 
-use crate::{
-    token::{Token, TokenStream},
-    ExpectTrue,
-};
+use crate::token::{Token, TokenStream};
 
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -109,10 +106,10 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
         .next()?
         .into_id()
         .expect("Expects identifier after `fn`");
-    tokens
-        .next()?
-        .is_paren_open()
-        .expect_true("Expects `(` after function name at function definition");
+    assert!(
+        tokens.next()?.is_paren_open(),
+        "Expects `(` after function name at function definition",
+    );
     let mut args = Vec::<String>::new();
     while !tokens.peek()?.is_paren_close() {
         args.push(tokens.next()?.into_id().expect("Expects argument name"));
@@ -138,10 +135,10 @@ fn parse_fn(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
 #[must_use]
 fn parse_let(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     let lhs = parse_expr(13, tokens)?;
-    tokens
-        .next()?
-        .is_eq()
-        .expect_true("Expects `=` after LHS of a `let` expression");
+    assert!(
+        tokens.next()?.is_eq(),
+        "Expects `=` after LHS of a `let` expression"
+    );
     let rhs = parse_expr(15, tokens)?;
     Some(Expr::Let(Box::new(lhs), Box::new(rhs)))
 }
@@ -171,12 +168,12 @@ fn parse_call_args(tokens: &mut Peekable<TokenStream>) -> Option<Vec<Expr>> {
 #[must_use]
 fn parse_if(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     let condition = parse_expr(15, tokens)?;
-    tokens.next()?.is_brace_open().expect_true("Expect `{`");
+    assert!(tokens.next()?.is_brace_open(), "Expect `{{`");
     let if_body = parse_block(tokens)?;
     let else_body = match tokens.peek() {
         Some(Token::Else) => {
             tokens.next();
-            tokens.next()?.is_brace_open().expect_true("Expect `{`");
+            assert!(tokens.next()?.is_brace_open(), "Expect `{{`");
             Some(parse_block(tokens)?)
         }
         _ => None,
@@ -192,7 +189,7 @@ fn parse_if(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
 #[inline(always)]
 #[must_use]
 fn parse_loop(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
-    tokens.next()?.is_brace_open().expect_true("Expect `{`");
+    assert!(tokens.next()?.is_brace_open(), "Expect `{{`");
     let body = parse_block(tokens)?;
     Some(Expr::Loop(Box::new(body)))
 }
@@ -242,7 +239,7 @@ fn parse_return(tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
 #[must_use]
 fn parse_expr(precedence: u8, tokens: &mut Peekable<TokenStream>) -> Option<Expr> {
     macro_rules! parse_unary_rtl {
-        ($precedence:expr,$expr_ty:path) => {{
+        ($precedence:expr , $expr_ty:path) => {{
             let expr = parse_expr($precedence, tokens).expect("Unexpected EOF");
             $expr_ty(Box::new(expr))
         }};
