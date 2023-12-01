@@ -7,13 +7,29 @@ it is not intended to be used for any production purposes.
 
 ## Compiling a File
 
+### Using `run.sh`
+
+You can use the `run.sh` script to compile and run one or multiple simp files.
+
+Note that if you're using a Mac with later versions of Xcode you may experience linker error. To solve this problem you need to use LLVM's linker `lld`, and therfore requiring the install of LLVM, see [Installing LLVM](#installing-llvm).
+
+```bash
+./run.sh main.simp lib.simp
+# If you encountered the linker crash on Mac:
+./run.sh --use-lld main.simp lib.simp
+# All availble flags:
+./run.sh --help
+```
+
+### Manual compiling
+
 SIMP uses the standard cargo build process:
 
 ```bash
-cargo build --release
+$ cargo build --release
 ```
 
-You can compile a SIMP source file into an object file by:
+Compile a SIMP source file into an object file by:
 
 ```bash
 # compile into source.o:
@@ -32,19 +48,30 @@ Note that if you're on Mac and using the latest versions of Xcode the default li
 $ clang -fuse-ld=/path/to/ld64.lld -o program
 ```
 
-To install `lld`, you need to install `LLVM`:
+Obviously you would need to install LLVM for this, see [Installing LLVM](#installing-llvm)
+
+#### Installing LLVM
+To install `lld`, you need to install LLVM:
 
 ```bash
-# You need to have homebrew, obviously.
+# You need to have homebrew installed, obviously.
 $ brew install llvm
 # Get the path to the LLVM directory.
 # (Usually /opt/homebrew/opt/llvm@17/).
 $ brew info llvm
-# The path to ld64.lld would then be:
-# /opt/homebrew/opt/llvm@17/bin/ld64.lld
-# You may then link the file using:
-$ clang -fuse-ld=/opt/homebrew/opt/llvm@17/bin/ld64.lld source.o -o program
 ```
+
+Assuming your path to LLVM directory is `/opt/homebrew/opt/llvm@17/`,
+the LLVM `bin` directory would then be: `/opt/homebrew/opt/llvm@17/bin/`.
+
+You may then add the this directory to PATH.
+
+```bash
+$ export PATH="$PATH:/opt/homebrew/opt/llvm@17/bin/"
+# Note that it is possible to the -fuse-lld flag in clang by specifying the path to ld64.lld, but setting PATH is required for the run.sh to work.
+```
+
+Note that any recent versions of LLVM works, it doesn't have to be LLVM 17.
 
 ## Basic Syntax:
 

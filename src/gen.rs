@@ -278,7 +278,7 @@ fn gen_loop<'e>(
     }
     let loop_info = unsafe { local.current_loop_mut().unwrap_unchecked() };
     diverges |= loop_info.break_count == 0;
-    if dbg!(diverges) {
+    if diverges {
         loop_info.val_ty = Some(ValueType::Never);
     } else {
         if !has_break_on_main_branch {
