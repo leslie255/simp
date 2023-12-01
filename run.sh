@@ -53,13 +53,13 @@ objects=()
 for source in ${sources[@]}; do
     out_path=$(simp_to_o $source)
     objects+=($out_path)
-    echo "# $0: Compiling $source"
+    echo "# $0: Compiling $source into $out_path"
     cargo run $release_flag -- $log_flag $source -o $out_path
     if [ $? -ne 0 ]; then
         exit $?
     fi
     if $dump; then
-        objdump -Dr program.o
+        objdump -Dr $out_path
     fi
 done
 
